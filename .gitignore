@@ -1,3 +1,5 @@
+# Exclude vim swap files
+/src/.*.sw[po]
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
