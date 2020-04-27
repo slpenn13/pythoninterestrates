@@ -39,13 +39,23 @@ class curve_builder():
         self.cf_matrix = None
         self.cf_prices = None
         self.results = None
+        self.deltas = None
+        self.zeros = None
         self.count_instruments_and_dates()
         self.build_arrays()
+        self.load_cf_results()
         self.load_cf_matrices()
         if self.curve_method == 0:
             result = self.calc_exact_method0()
             if result:
                 self.apply_yield_forward_calcs()
+        elif self.curve_method == 1:
+            result = self.calc_exact_method1()
+            if result:
+                self.apply_yield_forward_calcs()
+        else:
+            if self.dbg:
+                print("Warning -- no method ID %d exists" % (self.curve_method))
 
     def count_instruments_and_dates(self):
         ''' Counts totoal # of numbers loaded / interpolated by building process '''
@@ -72,14 +82,14 @@ class curve_builder():
             for key, item in self.options['interpolated_instruments'].items():
                 self.append_instrument_date(item['date'], key, True)
         else:
-            if self.dbg:
-                print("Warning interpolated instruments found")
+            if self.curve_method == 0 and self.dbg:
+                print("Warning NO interpolated instruments found")
 
         if 'interpolated_swaps' in self.options.keys():
             self.append_swaps()
         else:
-            if self.dbg:
-                print("Warning interpolated swap found!!")
+            if self.curve_method == 0 and self.dbg:
+                print("Warning NO interpolated swap found!!")
 
     def append_instrument_dates(self, instrument):
         ''' Appends series of dates for single instrument '''
@@ -145,10 +155,6 @@ class curve_builder():
             strt = intutil.convert_date_bdte(item['lower_date'], self.options)
             end = intutil.convert_date_bdte(item['upper']['date'], self.options)
 
-            date_diff_dbl = intutil.calc_bdte_diff(end, self.options, strt)
-            date_diff_final = intutil.calc_bdte_diff_int(
-                end, strt, self.options, dbg=False)
-
             per = intutil.convert_period(item['upper']['frequency'])
 
             sched = bdte.BusinessSchedule(strt, end, per)
@@ -158,10 +164,22 @@ class curve_builder():
                 # key adjusts sched for business date -- print("Here")
                 sched.adjust(self.options['control']['date_adjust'])
 
+
+            date_diff_final = intutil.calc_bdte_diff_int(
+                end, strt, self.options, dbg=False)
+
             if self.dbg:
                 print("## ", self.next_swap_key, strt, end, date_diff_final)
 
             self.next_swap_key = (self.next_swap_key + date_diff_final)
+            if 'control' in self.options.keys() and 'date_adjust' in\
+                    self.options['control'].keys():
+                if not strt.is_business_day():
+                    strt.adjust(self.options['control']['date_adjust'])
+                if not end.is_business_day():
+                    end.adjust(self.options['control']['date_adjust'])
+
+            date_diff_dbl = intutil.calc_bdte_diff(end, self.options, strt)
             key = "".join(["SWAP", str(self.next_swap_key)])
             # self.calc_next_swap_key(key)
             self.swaps[key] = intrate.build_swap(key, item['upper'], self.options, dbg=False)
@@ -173,10 +191,13 @@ class curve_builder():
                 if  min(sched) < dte < max(sched):
                     new_swap_dict = item['upper'].copy()
                     new_swap_dict['date'] = dte
+                    new_swap_dict['is_market'] = 0
                     date_diff_dbl2 = intutil.calc_bdte_diff(dte, self.options, strt)
-                    dbl2 = date_diff_dbl2 / date_diff_dbl
-                    new_swap_dict['rate'] = sci.interp(dbl2, xp=[0.0, 1.0], fp=[
-                        self.swaps[swap_key].r_swap, self.swaps[key].r_swap])
+
+                    new_swap_dict['rate'] = sci.interp(
+                        date_diff_dbl2, xp=[0.0, date_diff_dbl],
+                        fp=[self.swaps[swap_key].r_swap, self.swaps[key].r_swap])
+
                     new_swap_name = "".join(["SWAP", str(swap_strt + loc)])
                     self.swaps[new_swap_name] = intrate.build_swap(
                         new_swap_name, new_swap_dict, self.options, dbg=False)
@@ -192,7 +213,7 @@ class curve_builder():
             if swap_key == self.next_swap_key:
                 self.next_swap_key = self.next_swap_key + 1
             elif  swap_key > self.next_swap_key:
-                self.next_swap_key = "".join(["SWAP", str(swap_key + 1)])
+                self.next_swap_key = swap_key + 1
 
     def calc_schedule(self, start, stop, reference_date, count, period='Y'):
         ''' Calculates schedules of payments dates based on strt and stop
@@ -289,48 +310,116 @@ class curve_builder():
                 print("Construction NP array shape %i length %i" % (self.results.shape[0],
                                                                     self.results.shape[1]))
 
-    def load_cf_matrices(self):
-        ''' Loads all CF elements '''
-        if self.cf_matrix is not None and self.cf_prices is not None and\
-                self.results is not None:
+    def load_cf_results(self):
+        ''' Loads results elemt upto (but not including) zeros '''
+        if self.results is not None and self.cf_prices is not None:
             for item in self.cf_matrix.index:
                 dte = self.construct_date_str(item)
                 if dte in self.cf_dates.keys():
                     inst = self.determine_instrument_name(dte)
-                    if inst in self.options['instruments'].keys():
+                    if not isinstance(inst, bool) and inst in self.options['instruments'].keys():
                         if inst.upper().startswith("FORWA") or inst.upper().startswith("FUTURE"):
                             self.load_data_row(
                                 position=inst, rate=self.options['instruments'][inst]['rate'],
-                                date=self.options['instruments'][inst]['date'],
-                                reference_date=self.options['instruments'][inst]['ref_date'],
-                                typ=inst)
+                                date=self.options['instruments'][inst]['date'], typ=inst)
+                        elif inst.upper().startswith('SWAP'):
+                            self.load_data_row(
+                                position=inst, rate=self.swaps[inst].r_swap,
+                                date=self.swaps[inst].maturity,
+                                typ=inst, origin=int(self.swaps[inst].is_market_quote.value))
                         else:
                             self.load_data_row(position=inst,
                                                rate=self.options['instruments'][inst]['rate'],
                                                date=self.options['instruments'][inst]['date'],
                                                typ=inst)
 
-                        self.results.loc[inst, 'loaded'] = 1
-                    elif inst.upper().startswith('SWAP') and inst in self.swaps.keys():
+                    elif not isinstance(inst, bool) and inst.upper().startswith('SWAP') and\
+                            inst in self.swaps.keys():
                         self.load_data_row(
                             position=inst, rate=self.swaps[inst].r_swap,
                             date=self.swaps[inst].maturity,
-                            reference_date=self.swaps[inst].reset,
-                            typ=inst)
+                            typ=inst, origin=int(self.swaps[inst].is_market_quote.value))
                     else:
                         if self.dbg:
-                            print("Warning (instrument) %s not found" % (inst))
+                            print("Warning (instrument) %s %s not found" % (inst, dte))
 
 
-                    if self.dbg:
+                    if not isinstance(inst, bool) and self.dbg:
                         print(item, inst, str(bool(self.results.loc[inst, 'loaded'] > 0)))
                 else:
                     print("Warning (date) %s not found" % (dte))
-            if 'interpolated_instruments' in self.options.keys():
-                for key, item in  self.options['interpolated_instruments'].items():
+
+            if self.curve_method == 0 and 'interpolated_instruments' in self.options.keys():
+                for key, item in self.options['interpolated_instruments'].items():
                     self.interpolate_instruments(key, item)
         else:
             raise ValueError("Missing class elements!!!")
+
+    def load_cf_matrices(self):
+        ''' loads cash matrix elements (self.cf_matrix '''
+        if self.cf_matrix is not None and all(self.cf_matrix.shape) > 0:
+            for index in self.cf_matrix.index:
+                dte = self.construct_date_str(index)
+                if dte in self.cf_dates.keys():
+                    inst = self.determine_instrument_name(dte)
+                    if isinstance(inst, bool):
+                        continue #  skip loop if date not an instrument
+
+                    base = self.results.loc[inst]
+                    if intutil.rate_instruments.LIBOR == int(base.type):
+                        self.cf_matrix.loc[dte][inst] = (1 + 0.01*base['maturity']*base['rate'])
+                    elif  intutil.rate_instruments.FUTURE == int(base.type) or\
+                           intutil.rate_instruments.FORWARD == int(base.type):
+                        reference_date, reference_maturity = self.determine_reference_date(inst)
+
+                        self.cf_matrix.loc[reference_date][inst] = -1.
+
+                        self.cf_matrix.loc[dte][inst] = (
+                            1. +  (base['maturity'] - reference_maturity)*0.01*base['rate'])
+
+                    elif intutil.rate_instruments.SWAP == int(base.type):
+                        for loc, val in self.swaps[inst].cash_flow_df.iterrows():
+                            self.cf_matrix.loc[loc, inst] = val['CF']
+                    else:
+                        raise ValueError("Element Excluded!!! -- will impact zero calculations")
+
+                    self.results.loc[inst]['loaded'] += 1
+        else:
+            raise ValueError("Missing key matrix elements")
+
+    def load_data_row(self, position='LIBOR1', rate=0.15, date='2012-10-02',
+                      typ='LIBOR', origin=None):
+        ''' Loader -- operates based on typ '''
+
+        if "origin" in self.options['control']["columns"] and origin is None:
+            self.results.loc[position]['origin'] = intutil.load_types.MARKET.value
+        elif "origin" in self.options['control']["columns"] and\
+                isinstance(origin, (int, float)):
+            self.results.loc[position]['origin'] = origin
+
+        mat = intutil.calc_bdte_diff(date, self.options)
+        # print(position, date, mat)
+
+        if typ.upper().startswith('LIBOR'):
+            self.results.loc[position]['maturity'] = mat
+            self.results.loc[position]['rate'] = rate
+            self.results.loc[position]['type'] = intutil.rate_instruments.LIBOR.value
+
+            self.cf_prices[position] = 1.
+        elif typ.upper().startswith("FUTUR"):
+            self.results.loc[position]['maturity'] = mat
+            self.results.loc[position]['rate'] = intutil.futures_rate(rate)
+            self.results.loc[position]['type'] = intutil.rate_instruments.FUTURE.value
+
+        elif typ.upper().startswith("SWAP"):
+            self.results.loc[position]['maturity'] = mat
+            self.results.loc[position]['rate'] = rate
+            self.results.loc[position]['type'] = intutil.rate_instruments.SWAP.value
+
+        else:
+            raise ValueError("Type not supported")
+
+        self.results.loc[position, 'loaded'] = 1
 
     def determine_instrument_name(self, date, instrument=True):
         ''' Calculates instrument name based on provided date (string, same format cf_dates)'''
@@ -352,6 +441,34 @@ class curve_builder():
 
         return inst
 
+    def determine_reference_date(self, instrument):
+        ''' deterimines reference date and maturity '''
+        refereposition = None
+        maturity = np.nan
+
+        if instrument in self.options['instruments'].keys():
+            reference_date = self.options['instruments'][instrument]['ref_date']
+        elif int(self.results.loc[instrument]['origin']) == 2:
+            x0_nme = self.options['interpolated_instruments'][instrument]['reference_positions'][0]
+            x1_nme = self.options['interpolated_instruments'][instrument]['reference_positions'][1]
+
+            if self.options['instruments'][x0_nme]['date'] <=\
+                    self.options['instruments'][x1_nme]['date']:
+                x1_nme = x0_nme
+
+            reference_date = self.options['instruments'][x1_nme]['ref_date']
+        else:
+            raise ValueError("Faulty FUTURES")
+
+        refereposition = self.determine_instrument_name(reference_date)
+        # print(refereposition, inst, "\n")
+        # print(self.results.loc[inst], self.results.loc[refereposition])
+        if not isinstance(refereposition, bool) and refereposition in self.results.index:
+            maturity = self.results.loc[refereposition, 'maturity']
+        else:
+            maturity = intutil.calc_bdte_diff(reference_date, self.options)
+
+        return reference_date, maturity
 
     def construct_date_str(self, val):
         ''' Constructs date as string from object '''
@@ -359,53 +476,6 @@ class curve_builder():
         month = (str(val.month) if val.month > 9 else ("0" + str(val.month)))
         return self.options['control']['split'].join([str(val.year), month, day])
 
-    def load_data_row(self, position='LIBOR1', rate=0.15, date='2012-10-02',
-                      reference_date='2012-07-02', typ='LIBOR', origin=None):
-        ''' Loader -- operates based on typ '''
-
-        if "origin" in self.options['control']["columns"] and origin is None:
-            self.results.loc[position]['origin'] = intutil.load_types.MARKET.value
-        elif "origin" in self.options['control']["columns"] and\
-                isinstance(origin, (int, float)):
-            self.results.loc[position]['origin'] = origin
-
-        mat = intutil.calc_bdte_diff(date, self.options)
-
-        if typ.upper().startswith('LIBOR'):
-            self.results.loc[position]['maturity'] = mat
-            self.results.loc[position]['rate'] = rate
-            self.results.loc[position]['type'] = intutil.rate_instruments.LIBOR.value
-
-            # calc zero replaced with matrix solution (0) / pseudo inverse (1)
-            self.results.loc[position, 'loaded'] = 1
-            # calc zero replaced with matrix solution (0) / pseudo inverse (1)
-            self.cf_matrix.loc[date][position] = (1 + 0.01*mat*rate)
-            self.cf_prices[position] = 1.
-        elif typ.upper().startswith("FUTUR"):
-            self.results.loc[position]['maturity'] = mat
-            self.results.loc[position]['rate'] = intutil.futures_rate(rate)
-            self.results.loc[position]['type'] = intutil.rate_instruments.FUTURE.value
-
-            # calc zero replaced with matrix solution (0) / pseudo inverse (1)
-            self.cf_matrix.loc[reference_date][position] = -1.
-            refereposition = self.determine_instrument_name(reference_date)
-
-            self.cf_matrix.loc[date][position] = (1. +
-                                                  (self.results.loc[position]['maturity'] -
-                                                   self.results.loc[refereposition]['maturity'])
-                                                  *0.01*self.results.loc[position]['rate'])
-
-            self.results.loc[position, 'loaded'] = 1
-        elif typ.upper().startswith("SWAP"):
-            self.results.loc[position]['maturity'] = mat
-            self.results.loc[position]['rate'] = rate
-            self.results.loc[position]['type'] = intutil.rate_instruments.SWAP.value
-            for loc, val in self.swaps[position].cash_flow_df.iterrows():
-                self.cf_matrix.loc[loc, position] = val['CF']
-
-            self.results.loc[position, 'loaded'] = 1
-        else:
-            raise ValueError("Type not supported")
 
     def interpolate_instruments(self, result_position, item_dict):
         ''' Simple linear interpolator that constructs interpolated instrument of same time
@@ -441,19 +511,20 @@ class curve_builder():
                                    typ='LIBOR', origin=intutil.load_types.INTERPOLATED.value)
             else:
                 if position1 in self.options['instruments'].keys():
-                    ref_date = self.options['instruments'][position1]['date']
+                    if typ.upper().startswith("FUTUR") or typ.upper().startswith("FORWA"):
+                        rate = intutil.inverse_futures_rates(rate)
 
                     self.load_data_row(position=result_position, rate=rate, date=item_dict['date'],
-                                       reference_date=ref_date, typ=typ,
-                                       origin=intutil.load_types.INTERPOLATED.value)
+                                       typ=typ, origin=intutil.load_types.INTERPOLATED.value)
                 else:
                     print("Warning no item %s loaded" % (result_position))
 
             if self.dbg:
-                print("Interpolate Results: %d %d  %d  %i" % (
-                    self.results.loc[result_position][0], self.results.loc[result_position][1],
-                    self.results.loc[result_position][2],
-                    int(self.results.loc[result_position][3])))
+                print("Interpolate Results: %f %f  %d  %d" % (
+                    self.results.loc[result_position]['maturity'],
+                    self.results.loc[result_position]['rate'],
+                    int(self.results.loc[result_position]['type']),
+                    int(self.results.loc[result_position]['origin'])))
 
         else:
             raise ValueError("(interpolate_instruments): Instrument Types MUST MATCH")
@@ -471,6 +542,75 @@ class curve_builder():
 
                 for loc, val in zip(self.results.index, zeros):
                     self.results.loc[loc, 'zero'] = val
+        else:
+            if self.dbg:
+                print("Warning -- zeros NOT calculated")
+        return res
+
+    def calc_exact_method1(self):
+        ''' implements exact weighting method kxN (k << N) '''
+        res = False
+        if isinstance(self.cf_matrix, pd.DataFrame) and all(self.cf_matrix.shape) > 0 and\
+                isinstance(self.cf_prices, pd.Series) and self.cf_prices.size > 0:
+            dim = self.cf_matrix.shape[0]
+            M_inverse = np.ones([dim, dim])
+            for j in np.arange(0, dim):
+                if (j+1) < dim:
+                    M_inverse[j][j+1:] = 0.0
+            mult = np.zeros(dim)
+            mult[0] = 1.0
+            dates, vals = intutil.calc_schedule_list(self.cf_dates.keys(), self.options)
+            W_inverse = np.diag(np.sqrt(vals.transpose()[1]))
+
+            A = (self.cf_matrix.transpose().dot(M_inverse)).dot(W_inverse)
+            A_fnl = A.dot(A.transpose())
+            A_fnl = np.linalg.inv(A_fnl)
+            self.deltas = (self.cf_prices -  (self.cf_matrix.transpose().dot(M_inverse)).dot(mult))
+            self.deltas = (A.transpose().dot(A_fnl)).dot(self.deltas.values)
+            if self.dbg:
+                print("M_inverse %f %f " % (len(M_inverse), M_inverse.size/len(M_inverse)))
+                print("W_inverse %f %f " % (len(W_inverse), W_inverse.size/len(W_inverse)))
+                print("A %f %f " % (len(A), A.size/len(A)))
+                print("A_fnl %f %f " % (len(A_fnl), A_fnl.size/len(A_fnl)))
+                print("cf_matrix %f %f " % (self.cf_matrix.shape[0], self.cf_matrix.shape[1]))
+                print("deltas %f %f " % (len(self.deltas), self.deltas.size/len(self.deltas)))
+                # print("mult %f %f " % (len(mult), mult.size/len(mult)))
+                print("cf_prices %f %f " % (len(self.cf_prices),
+                                            self.cf_prices.size/len(self.cf_prices)))
+
+                # print("M_inverse Diag")
+                # print(M_inverse.diagonal())
+                # print("Items %f %f %f" % (M_inverse[0][dim-1], M_inverse[2][1], M_inverse[2][3]))
+                # print("W_inverse Diag")
+                # print(W_inverse.diagonal())
+                # print("Items %f %f %f" % (W_inverse[0][dim-1], W_inverse[2][1], W_inverse[2][3]))
+                # print("Deltas")
+                # print(self.deltas)
+                # print("A_fnl*A_fnl.inv")
+                # print(B_fnl.dot(A_fnl).diagonal())
+
+
+
+            self.zeros = M_inverse.dot((W_inverse.dot(self.deltas) + mult))
+            self.zeros = pd.DataFrame({'maturity': vals.transpose()[0], 'date_diff':
+                                       vals.transpose()[1], 'zero': self.zeros,
+                                       'origin': 2.0*np.ones(len(vals))},
+                                      index=dates)
+
+            if all(np.logical_not(np.isnan(self.zeros))) and\
+                    np.logical_and(all(self.zeros > -0.00005), all(self.zeros < 1.001)):
+                res = True
+
+
+                for loc in self.results.index:
+                    for indx, val in self.zeros.iterrows():
+                        if abs(self.results.loc[loc, 'maturity'] - val['maturity']) < 0.00001:
+                            self.results.loc[loc, 'zero'] = val['zero']
+                            self.zeros.loc[indx, 'origin'] = 1.
+                            break
+            else:
+                if self.dbg:
+                    print(self.zeros)
         else:
             if self.dbg:
                 print("Warning -- zeros NOT calculated")

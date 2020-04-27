@@ -21,17 +21,53 @@ class rate_instruments(Enum):
 
     def __eq__(self, other):
         # print(self.value, other, type(other))
-        return self.value == other.value
+        result = False
+        if isinstance(other, rate_instruments):
+            result = (self.value == other.value)
+        elif isinstance(other, int):
+            result = (self.value == other)
+
+        return result
 
     def __lt__(self, other):
         # print(self.value, other, type(other))
-        return self.value < other.value
+        result = False
+        if isinstance(other, rate_instruments):
+            result = (self.value < other.value)
+        elif isinstance(other, int):
+            result = (self.value < other)
+        else:
+            raise NotImplementedError
+
+        return result
+
 @unique
 class load_types(Enum):
     ''' Enumeration determining the origin of data point '''
     UNKNOWN = 0
     MARKET = 1
     INTERPOLATED = 2
+
+    def __eq__(self, other):
+        result = False
+        if isinstance(other, load_types):
+            result = (self.value == other.value)
+        elif isinstance(other, int):
+            result = (self.value == other)
+
+        return result
+
+    def __lt__(self, other):
+        # print(self.value, other, type(other))
+        result = False
+        if isinstance(other, load_types):
+            result = (self.value < other.value)
+        elif isinstance(other, int):
+            result = (self.value < other)
+        else:
+            raise NotImplementedError
+
+        return result
 
 
 def calc_libor_zero_coupon(libor, time):
@@ -148,23 +184,23 @@ def adjust_diff_to_int(diff, tol):
     elif  0 < diff - np.floor(diff) <= tol:
         diff_final = int(np.floor(diff))
     else:
-        diff_final = int(np.floor(diff))
+        diff_final = int(np.ceil(diff))
     return diff_final
 
 def convert_period(period='Y'):
     '''converts JSON period into BusinessDate period '''
     if period.upper().startswith('M'):
-        per = '1M'
+        per = bdte.BusinessPeriod(months=1)
     elif period.upper().startswith('Q'):
-        per = '1Q'
+        per = bdte.BusinessPeriod(quarters=1)
     elif period.upper().startswith('S'):
-        per = '6M'
+        per = bdte.BusinessPeriod(months=6)
     elif period.upper().startswith('W'):
-        per = '1W'
+        per = bdte.BusinessPeriod(weeks=1)
     elif period.upper().startswith('D'):
-        per = '1D'
+        per = bdte.BusinessPeriod(days=1)
     else:
-        per = '1Y'
+        per = bdte.BusinessPeriod(years=1)
 
     return per
 
@@ -180,29 +216,49 @@ def calc_schedule(start, count, options, period='Y'):
 
     if period.upper().startswith('M'):
         stp_fnl = strt_fnl + bdte.BusinessPeriod(months=count)
-        per = '1M'
+        per = bdte.BusinessPeriod(months=1)
     elif period.upper().startswith('Q'):
         stp_fnl = strt_fnl + bdte.BusinessPeriod(quarters=count)
-        per = '1Q'
+        per = bdte.BusinessPeriod(quarters=1)
     elif period.upper().startswith('S'):
         stp_fnl = strt_fnl + bdte.BusinessPeriod(months=count)
-        per = '6M'
+        per = bdte.BusinessPeriod(months=6)
     elif period.upper().startswith('W'):
         stp_fnl = strt_fnl + bdte.BusinessPeriod(weeks=count)
-        per = '1W'
+        per = bdte.BusinessPeriod(weeks=1)
     elif period.upper().startswith('D'):
         stp_fnl = strt_fnl + bdte.BusinessPeriod(days=count)
-        per = '1D'
+        per = bdte.BusinessPeriod(days=1)
     else:
         stp_fnl = strt_fnl + bdte.BusinessPeriod(years=count)
-        per = '1Y'
+        per = bdte.BusinessPeriod(years=1)
 
+    # sched = bdte.BusinessSchedule(strt_fnl, stp_fnl, per)
     sched = bdte.BusinessSchedule(strt_fnl, stp_fnl, per)
     if 'control' in options.keys() and 'date_adjust' in options['control'].keys() and\
             options['control']['date_adjust'] in ['follow', 'flw', 'modified']:
         sched.adjust(options['control']['date_adjust'])
 
     return sched
+
+def calc_schedule_list(items, options):
+    ''' calculates vectors of bdte.BusinessDate (sorted) a matrix Nx2'''
+    res_date = []
+    cnt = len(items)
+    res_values = np.zeros([cnt, 2])
+    for itm in items:
+        res_date.append(convert_date_bdte(itm, options))
+
+    res_date_final = sorted(res_date)
+
+    for loc, itm in zip(np.arange(0, cnt), res_date_final):
+        res_values[loc][0] = calc_bdte_diff(itm, options)
+        if loc == 0:
+            res_values[loc][1] = res_values[loc][0]
+        else:
+            res_values[loc][1] = res_values[loc][0] - res_values[loc-1][0]
+
+    return res_date_final, res_values
 
 def constuct_schedule(dates, options, position, start, stop, count, period='Y'):
     ''' Calculates and construct schedule based on controls
@@ -295,9 +351,13 @@ def calc_forward_rate(df, options):
                         1.0 / float(curr['zero']) - 1.)
             else:
                 if prev is not None and isinstance(prev, (pd.Series, pd.DataFrame)):
-                    df.at[itm[0], 'forward'] = 100./(
-                        float(curr['maturity']) -
-                        float(prev['maturity']))*(float(prev['zero'])/float(curr['zero']) - 1.)
+                    try:
+                        df.at[itm[0], 'forward'] = 100./(
+                            float(curr['maturity']) -
+                            float(prev['maturity']))*(float(prev['zero'])/float(curr['zero']) - 1.)
+                    except ZeroDivisionError:
+                        # print(curr, prev)
+                        df.at[itm[0], 'forward'] = np.nan
                 else:
                     df.at[itm[0], 'forward'] = 100./(float(curr['maturity']))*(
                         1.0 / float(curr['zero']) - 1.)
@@ -378,8 +438,9 @@ def interpolate_instruments(result_position, result_date, position1, position2, 
                 df[position1][2])
 
         if dbg:
-            print("Interpolate Results: %d %d  %d  %i" % (
+            print("Interpolate Results: %d %f (%f) %f  %d" % (
                 df[result_position][0], df[result_position][1],
+                (df[result_position][0] - df[position1][0]),
                 df[result_position][2], int(df[result_position][3])))
 
     else:
@@ -441,7 +502,9 @@ def interpolate_price_swaps(rate, df, dates, options, positions=None,
 
 def load_data_row(options, df=None, dates=None, position=0, rate=0.15, date='2012-10-02',
                   typ='LIBOR', ref_position=-1, dbg=True):
-    ''' Loader -- operates based on typ '''
+    ''' DEPRECATED -- see curve constructor
+    Loader -- operates based on typ
+    '''
     if df is not None and isinstance(df, np.ndarray) and\
             int(df.size / len(df)) == len(options['control']["columns"]):
         if dbg:

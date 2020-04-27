@@ -52,6 +52,8 @@ class fi_instrument():
         maturity: date of final event, e.g. final payment
         '''
         count = intutil.calc_bdte_diff_int(maturity, start, self.options, princ, dbg=self.debug)
+        # print(self.name, count)
+
         if self.frequency.upper().startswith('M'):
             per = 12*count
         elif self.frequency.upper().startswith('Q'):
@@ -65,7 +67,16 @@ class fi_instrument():
         else:
             per = count
 
-        return intutil.calc_schedule(start, per, self.options, self.frequency)
+        if self.debug:
+            print(start, per, self.frequency)
+
+        mat = intutil.convert_date_bdte(maturity, self.options)
+        sched = intutil.calc_schedule(start, per, self.options, self.frequency)
+        if not mat.is_business_day() and 'date_adjust' in self.options['control'].keys() and\
+                self.options['control']['date_adjust'] in ['follow']:
+            mat = mat.adjust(self.options['control']['date_adjust'])
+        sched = [itm for itm in sched if itm <= mat]
+        return sorted(sched)
 
     def build_cf_matrix(self):
         ''' build CF df w/ dates '''
@@ -164,8 +175,12 @@ class swap(fi_instrument):
     ''' Simple swpa instruemnt that accepts legs as inputs'''
     instrument_type = intutil.rate_instruments.SWAP
 
-    def __init__(self, name, leg1, leg2, options, dbg=False):
-        ''' Swap constructor '''
+    def __init__(self, name, leg1, leg2, options, is_market=True, reset=None, dbg=False):
+        ''' Swap constructor
+        name: str determinig name of SWAP
+        leg1: first leg in the swap
+        leg2: second leg in the swap CF (leg1 - leg2)
+        '''
         self.legs = []
 
         if isinstance(leg1, fi_instrument) and isinstance(leg2, fi_instrument):
@@ -199,18 +214,32 @@ class swap(fi_instrument):
             else:
                 raise ValueError("One of instruments must be FIXED or both floating")
 
-
-            if 'is_fixed_payer' in options.keys():
-                self.is_fixed_payer = bool(int(options['is_fixed_payer']) > 0)
+            if reset is None:
+                self.reset = min_lg1
             else:
-                self.is_fixed_payer = True
+                self.reset = intutil.convert_date_bdte(reset, options)
+                
 
-            self.reset = min_lg1
             self.maturity = max(max_lg1, max_lg2)
-            super().__init__(name, min_lg1, max_lg1, options, self.notional,
+
+            super().__init__(name, self.reset, self.maturity, options, self.notional,
                              self.legs[0].coupon.frequency,
                              columns=['maturity', 'time_diff', 'CF', 'CF_fixed', 'CF_floating'],
                              dbg=dbg)
+
+            if 'is_fixed_payer' in self.options.keys():
+                self.is_fixed_payer = bool(int(self.options['is_fixed_payer']) > 0)
+            else:
+                self.is_fixed_payer = True
+
+            self.is_market_quote = (intutil.load_types.MARKET if\
+                                    is_market else
+                                    intutil.load_types.INTERPOLATED)
+
+            if not self.reset.is_business_day() and\
+                        'date_adjust' in options['control'].keys() and\
+                        options['control']['date_adjust'] in ['follow']:
+                self.reset = self.reset.adjust(options['control']['date_adjust'])
         else:
             raise ValueError("Coupon payment dates are not congruent")
 
@@ -245,20 +274,30 @@ class swap(fi_instrument):
 
 
 def build_swap(name, swap_dict, options, dbg=False):
-    ''' Constructs SWAP from dictionary '''
+    ''' Helper function -- Constructs SWAP from dictionary '''
     if swap_dict["type"].upper() == 'SWAP':
         princ = (swap_dict['princ'] if 'princ' in swap_dict.keys() else 1.0)
-        cpn_fixed = intutil.fixed_coupon(swap_dict['rate'], swap_dict['frequency'])
+        cpn_fixed = intutil.fixed_coupon(coupon=swap_dict['rate'],
+                                         frequency=swap_dict['frequency'])
+
         lg1 = fixed_coupon_bond('FIXED', swap_dict['reset_date'], swap_dict['date'],
                                 options, cpn_fixed, princ, dbg=dbg)
 
-        cpn_float = intutil.floating_coupon(swap_dict["reference_rate"], swap_dict['frequency'])
+        cpn_float = intutil.floating_coupon(reference_rate=swap_dict["reference_rate"],
+                                            frequency=swap_dict['frequency'])
+
         lg2 = floating_rate_bond("FLOATING", swap_dict['reset_date'], swap_dict['date'],
                                  options, cpn_float, princ, dbg)
 
-        swap_final = swap(name, lg1, lg2, options, dbg=dbg)
+        if 'is_market' in swap_dict.keys():
+            is_market = bool(int(swap_dict['is_market']) > 0)
+        else:
+            is_market = True
+
+
+        swap_final = swap(name, lg1, lg2, options, is_market, swap_dict['reset_date'], dbg=dbg)
     else:
-        raise ValueError("Dicxt type muyst be swap")
+        raise ValueError("Dict type muyst be swap")
 
     return swap_final
 
