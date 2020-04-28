@@ -3,14 +3,14 @@
 import numpy as np
 from scipy.stats import norm as norm_dist
 # import pandas as pd
-from interest_rate_utilities import short_rate_model as  short_rate
+from interest_rate_base import short_rate_model as  short_rate
 
 
 class short_rate_vasicek(short_rate):
     ''' implementation of Vasicek Short Rate Model '''
-    def __init__(self, kappa, theta, sigma, r0, dbg=False):
+    def __init__(self, kappa, theta, sigma, r0, norm_method, dbg=False):
         ''' Vasicek implementation of short rate model '''
-        super().__init__(kappa, theta, sigma, r0)
+        super().__init__(kappa, theta, sigma, r0, calc_norm_method=norm_method)
         self.debug = dbg
 
         if self.debug:
@@ -28,17 +28,17 @@ class short_rate_vasicek(short_rate):
             print("@(t) %f Const %f T %f KT %f 2KT %f" % (t, const, calc_t, calc_kt, calc_2kt))
         return np.exp(-1.*(const + calc_t + calc_kt + calc_2kt))
 
-    def calc_norm_v(self, t0, t1):
-        ''' calculates vasicek norm (v(s, t0, t1) '''
-        res1 = self.sigma**2 / self.kappa**2
-        res2 = (np.exp(-self.kappa*t0) - np.exp(-self.kappa*t1))**2
-        res3 = 0.5*(np.exp(2*self.kappa*t0)-1.) / (self.kappa)
-        if self.debug:
-            print("self.kappa %f theta %f self.sigma %f t0 %f t1 %f" %
-                  (self.kappa, self.theta, self.sigma, t0, t1))
-            print("itm1 %f itm2 %f imt3 %f" % (res1, res2, res3))
-
-        return res1*res2*res3
+#    def calc_norm_v(self, t0, t1):
+#        ''' calculates vasicek norm (v(s, t0, t1) '''
+#        res1 = self.sigma**2 / self.kappa**2
+#        res2 = (np.exp(-self.kappa*t0) - np.exp(-self.kappa*t1))**2
+#        res3 = 0.5*(np.exp(2*self.kappa*t0)-1.) / (self.kappa)
+#        if self.debug:
+#            print("self.kappa %f theta %f self.sigma %f t0 %f t1 %f" %
+#                  (self.kappa, self.theta, self.sigma, t0, t1))
+#            print("itm1 %f itm2 %f imt3 %f" % (res1, res2, res3))
+#
+#        return res1*res2*res3
 
     def calc_convexity_adjustment(self, t, t0, t1):
         ''' Calculates convexity adjustment '''
@@ -61,7 +61,7 @@ class short_rate_vasicek(short_rate):
 
     def calc_di_european_call(self, strike, t0, t1):
         ''' calculates d1 & d2 for european call on Zero coupon maturity t1 and exercise t0 '''
-        norm_v = self.calc_norm_v(t0, t1)
+        norm_v = self.calc_norm_v(t=0, t0=t0, t1=t1)
 
         pt_t0 = self.price_zero(t0)
         pt_t1 = self.price_zero(t1)

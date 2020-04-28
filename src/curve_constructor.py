@@ -7,8 +7,9 @@ import scipy as sci
 import businessdate as bdte
 import numpy as np
 import pandas as pd
-import interest_rate_utilities as intutil
 import interest_rate_instruments as intrate
+import interest_rate_base as intbase
+import interest_rate_dates as intdate
 
 
 class curve_builder():
@@ -93,7 +94,7 @@ class curve_builder():
 
     def append_instrument_dates(self, instrument):
         ''' Appends series of dates for single instrument '''
-        if self.swaps[instrument].instrument_type == intutil.rate_instruments.SWAP and\
+        if self.swaps[instrument].instrument_type == intbase.rate_instruments.SWAP and\
                 all(self.swaps[instrument].cash_flow_df.shape) > 0:
             for itm in self.swaps[instrument].cash_flow_df.index:
                 if itm == self.swaps[instrument].reset:
@@ -152,10 +153,10 @@ class curve_builder():
         self.next_swap_key = self.next_swap_key - 1
 
         for _, item in self.options['interpolated_swaps'].items():
-            strt = intutil.convert_date_bdte(item['lower_date'], self.options)
-            end = intutil.convert_date_bdte(item['upper']['date'], self.options)
+            strt = intdate.convert_date_bdte(item['lower_date'], self.options)
+            end = intdate.convert_date_bdte(item['upper']['date'], self.options)
 
-            per = intutil.convert_period(item['upper']['frequency'])
+            per = intdate.convert_period(item['upper']['frequency'])
 
             sched = bdte.BusinessSchedule(strt, end, per)
             if 'control' in self.options.keys() and\
@@ -165,7 +166,7 @@ class curve_builder():
                 sched.adjust(self.options['control']['date_adjust'])
 
 
-            date_diff_final = intutil.calc_bdte_diff_int(
+            date_diff_final = intdate.calc_bdte_diff_int(
                 end, strt, self.options, dbg=False)
 
             if self.dbg:
@@ -179,7 +180,7 @@ class curve_builder():
                 if not end.is_business_day():
                     end.adjust(self.options['control']['date_adjust'])
 
-            date_diff_dbl = intutil.calc_bdte_diff(end, self.options, strt)
+            date_diff_dbl = intdate.calc_bdte_diff(end, self.options, strt)
             key = "".join(["SWAP", str(self.next_swap_key)])
             # self.calc_next_swap_key(key)
             self.swaps[key] = intrate.build_swap(key, item['upper'], self.options, dbg=False)
@@ -192,7 +193,7 @@ class curve_builder():
                     new_swap_dict = item['upper'].copy()
                     new_swap_dict['date'] = dte
                     new_swap_dict['is_market'] = 0
-                    date_diff_dbl2 = intutil.calc_bdte_diff(dte, self.options, strt)
+                    date_diff_dbl2 = intdate.calc_bdte_diff(dte, self.options, strt)
 
                     new_swap_dict['rate'] = sci.interp(
                         date_diff_dbl2, xp=[0.0, date_diff_dbl],
@@ -226,7 +227,7 @@ class curve_builder():
         periods: type period to generate
         '''
 
-        base_dates = intutil.calc_schedule(start, count, self.options, period)
+        base_dates = intdate.calc_schedule(start, count, self.options, period)
 
         adj = (self.options['control']['date_adjust'].lower()
                if 'date_adjust' in self.options['control'].keys() else
@@ -366,10 +367,10 @@ class curve_builder():
                         continue #  skip loop if date not an instrument
 
                     base = self.results.loc[inst]
-                    if intutil.rate_instruments.LIBOR == int(base.type):
+                    if intbase.rate_instruments.LIBOR == int(base.type):
                         self.cf_matrix.loc[dte][inst] = (1 + 0.01*base['maturity']*base['rate'])
-                    elif  intutil.rate_instruments.FUTURE == int(base.type) or\
-                           intutil.rate_instruments.FORWARD == int(base.type):
+                    elif  intbase.rate_instruments.FUTURE == int(base.type) or\
+                           intbase.rate_instruments.FORWARD == int(base.type):
                         reference_date, reference_maturity = self.determine_reference_date(inst)
 
                         self.cf_matrix.loc[reference_date][inst] = -1.
@@ -377,7 +378,7 @@ class curve_builder():
                         self.cf_matrix.loc[dte][inst] = (
                             1. +  (base['maturity'] - reference_maturity)*0.01*base['rate'])
 
-                    elif intutil.rate_instruments.SWAP == int(base.type):
+                    elif intbase.rate_instruments.SWAP == int(base.type):
                         for loc, val in self.swaps[inst].cash_flow_df.iterrows():
                             self.cf_matrix.loc[loc, inst] = val['CF']
                     else:
@@ -392,29 +393,28 @@ class curve_builder():
         ''' Loader -- operates based on typ '''
 
         if "origin" in self.options['control']["columns"] and origin is None:
-            self.results.loc[position]['origin'] = intutil.load_types.MARKET.value
+            self.results.loc[position]['origin'] = intbase.load_types.MARKET.value
         elif "origin" in self.options['control']["columns"] and\
                 isinstance(origin, (int, float)):
             self.results.loc[position]['origin'] = origin
 
-        mat = intutil.calc_bdte_diff(date, self.options)
+        mat = intdate.calc_bdte_diff(date, self.options)
         # print(position, date, mat)
 
         if typ.upper().startswith('LIBOR'):
             self.results.loc[position]['maturity'] = mat
             self.results.loc[position]['rate'] = rate
-            self.results.loc[position]['type'] = intutil.rate_instruments.LIBOR.value
+            self.results.loc[position]['type'] = intbase.rate_instruments.LIBOR.value
 
             self.cf_prices[position] = 1.
         elif typ.upper().startswith("FUTUR"):
             self.results.loc[position]['maturity'] = mat
-            self.results.loc[position]['rate'] = intutil.futures_rate(rate)
-            self.results.loc[position]['type'] = intutil.rate_instruments.FUTURE.value
-
+            self.results.loc[position]['rate'] = intbase.futures_rate(rate)
+            self.results.loc[position]['type'] = intbase.rate_instruments.FUTURE.value
         elif typ.upper().startswith("SWAP"):
             self.results.loc[position]['maturity'] = mat
             self.results.loc[position]['rate'] = rate
-            self.results.loc[position]['type'] = intutil.rate_instruments.SWAP.value
+            self.results.loc[position]['type'] = intbase.rate_instruments.SWAP.value
 
         else:
             raise ValueError("Type not supported")
@@ -466,7 +466,7 @@ class curve_builder():
         if not isinstance(refereposition, bool) and refereposition in self.results.index:
             maturity = self.results.loc[refereposition, 'maturity']
         else:
-            maturity = intutil.calc_bdte_diff(reference_date, self.options)
+            maturity = intdate.calc_bdte_diff(reference_date, self.options)
 
         return reference_date, maturity
 
@@ -498,7 +498,7 @@ class curve_builder():
             else:
                 typ = self.options['instruments'][position1]['type']
 
-            mat = intutil.calc_bdte_diff(item_dict['date'], self.options)
+            mat = intdate.calc_bdte_diff(item_dict['date'], self.options)
 
             dist = self.results.loc[position2]['maturity'] - self.results.loc[position1]['maturity']
             q = (mat - self.results.loc[position1]['maturity']) / dist
@@ -508,14 +508,14 @@ class curve_builder():
 
             if result_position.upper().startswith('LIBOR'):
                 self.load_data_row(position=result_position, rate=rate, date=item_dict['date'],
-                                   typ='LIBOR', origin=intutil.load_types.INTERPOLATED.value)
+                                   typ='LIBOR', origin=intbase.load_types.INTERPOLATED.value)
             else:
                 if position1 in self.options['instruments'].keys():
                     if typ.upper().startswith("FUTUR") or typ.upper().startswith("FORWA"):
-                        rate = intutil.inverse_futures_rates(rate)
+                        rate = intbase.inverse_futures_rates(rate)
 
                     self.load_data_row(position=result_position, rate=rate, date=item_dict['date'],
-                                       typ=typ, origin=intutil.load_types.INTERPOLATED.value)
+                                       typ=typ, origin=intbase.load_types.INTERPOLATED.value)
                 else:
                     print("Warning no item %s loaded" % (result_position))
 
@@ -559,7 +559,7 @@ class curve_builder():
                     M_inverse[j][j+1:] = 0.0
             mult = np.zeros(dim)
             mult[0] = 1.0
-            dates, vals = intutil.calc_schedule_list(self.cf_dates.keys(), self.options)
+            dates, vals = intdate.calc_schedule_list(self.cf_dates.keys(), self.options)
             W_inverse = np.diag(np.sqrt(vals.transpose()[1]))
 
             A = (self.cf_matrix.transpose().dot(M_inverse)).dot(W_inverse)
@@ -619,6 +619,6 @@ class curve_builder():
     def apply_yield_forward_calcs(self):
         ''' Calculates spot, yield and forwards based on provides zeros
         '''
-        self.results = intutil.calc_yield_continuous(self.results, self.options)
-        self.results = intutil.calc_spot_simple(self.results, self.options)
-        self.results = intutil.calc_forward_rate(self.results, self.options)
+        self.results = intbase.calc_yield_continuous(self.results)
+        self.results = intbase.calc_spot_simple(self.results)
+        self.results = intbase.calc_forward_rate(self.results, self.options)

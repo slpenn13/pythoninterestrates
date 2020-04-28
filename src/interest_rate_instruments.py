@@ -3,12 +3,13 @@
 # import businessdate as bdte
 import numpy as np
 import pandas as pd
-import interest_rate_utilities as intutil
+import interest_rate_base as intbase
+import interest_rate_dates as intdate
 
 
 class fi_instrument():
     ''' initial fixed income / interest rate instrument class '''
-    instrument_type = intutil.rate_instruments.ZERO_COUPON
+    instrument_type = intbase.rate_instruments.ZERO_COUPON
 
     def __init__(self, name, first, maturity, options, princ=1.0, frequency='Y',
                  columns=None, dbg=False):
@@ -51,7 +52,7 @@ class fi_instrument():
         start: date of first event
         maturity: date of final event, e.g. final payment
         '''
-        count = intutil.calc_bdte_diff_int(maturity, start, self.options, princ, dbg=self.debug)
+        count = intdate.calc_bdte_diff_int(maturity, start, self.options, princ, dbg=self.debug)
         # print(self.name, count)
 
         if self.frequency.upper().startswith('M'):
@@ -70,8 +71,8 @@ class fi_instrument():
         if self.debug:
             print(start, per, self.frequency)
 
-        mat = intutil.convert_date_bdte(maturity, self.options)
-        sched = intutil.calc_schedule(start, per, self.options, self.frequency)
+        mat = intdate.convert_date_bdte(maturity, self.options)
+        sched = intdate.calc_schedule(start, per, self.options, self.frequency)
         if not mat.is_business_day() and 'date_adjust' in self.options['control'].keys() and\
                 self.options['control']['date_adjust'] in ['follow']:
             mat = mat.adjust(self.options['control']['date_adjust'])
@@ -83,7 +84,7 @@ class fi_instrument():
 
         dates = []
         matrix = self.cash_flow_df.copy()
-        now = intutil.convert_date_bdte(self.options['start_date'], self.options)
+        now = intdate.convert_date_bdte(self.options['start_date'], self.options)
         prev = now
 
         for loc, itm in zip(np.arange(0, len(self.schedule)), self.schedule):
@@ -112,7 +113,7 @@ class fixed_coupon_bond(fi_instrument):
     ''' class corresponding to fixed rate coupon bond on princ, with final payment
         (1 + 0.01*coupon)*princ
     '''
-    instrument_type = intutil.rate_instruments.FIXED_RATE_BOND
+    instrument_type = intbase.rate_instruments.FIXED_RATE_BOND
 
     def __init__(self, name, first, maturity, options, coupon, princ=1.0, dbg=False):
         ''' fixed coupon bond constructor
@@ -124,12 +125,12 @@ class fixed_coupon_bond(fi_instrument):
         princ: notional on which coupon payments are based
         dbg: controls debugging of instrument
         '''
-        if isinstance(coupon, intutil.fixed_coupon):
-            self.coupon = intutil.fixed_coupon(coupon.coupon, coupon.frequency,
+        if isinstance(coupon, intbase.fixed_coupon):
+            self.coupon = intbase.fixed_coupon(coupon.coupon, coupon.frequency,
                                                coupon.convention, coupon.adjust,
                                                coupon.in_percent)
         elif isinstance(coupon, float):
-            self.coupon = intutil.fixed_coupon(coupon=coupon)
+            self.coupon = intbase.fixed_coupon(coupon=coupon)
 
         super().__init__(name, first, maturity, options, princ=princ,
                          frequency=self.coupon.frequency, dbg=dbg)
@@ -150,16 +151,16 @@ class fixed_coupon_bond(fi_instrument):
 
 class floating_rate_bond(fi_instrument):
     '''class corresponds to floating rate coupon bond, with princ returned at final payment'''
-    instrument_type = intutil.rate_instruments.FLOATING_RATE_BOND
+    instrument_type = intbase.rate_instruments.FLOATING_RATE_BOND
 
     def __init__(self, name, first, maturity, options, coupon, princ=1.0, dbg=False):
         ''' floating rate bond constructor -- differs from FIXED RATE_BOND in coupon_dict '''
-        if isinstance(coupon, intutil.floating_coupon):
-            self.coupon = intutil.floating_coupon(
+        if isinstance(coupon, intbase.floating_coupon):
+            self.coupon = intbase.floating_coupon(
                 coupon.reference_rate, coupon.a, coupon.b, coupon.frequency,
                 coupon.convention, coupon.adjust, coupon.in_percent)
         elif isinstance(coupon, str) and coupon in ['LIBOR_1MO', 'LIBOR_3MO', 'LIBOR_MO']:
-            self.coupon = intutil.floating_coupon(coupon)
+            self.coupon = intbase.floating_coupon(coupon)
         else:
             raise ValueError("Coupon Dict must be of type floating_coupon")
 
@@ -173,7 +174,7 @@ class floating_rate_bond(fi_instrument):
 
 class swap(fi_instrument):
     ''' Simple swpa instruemnt that accepts legs as inputs'''
-    instrument_type = intutil.rate_instruments.SWAP
+    instrument_type = intbase.rate_instruments.SWAP
 
     def __init__(self, name, leg1, leg2, options, is_market=True, reset=None, dbg=False):
         ''' Swap constructor
@@ -201,12 +202,12 @@ class swap(fi_instrument):
                 self.legs[0].coupon.convention == self.legs[1].coupon.convention and\
                 max_lg1 == max_lg2 and\
                 min_lg1 == min_lg2:
-            if self.legs[0].instrument_type == intutil.rate_instruments.FIXED_RATE_BOND:
+            if self.legs[0].instrument_type == intbase.rate_instruments.FIXED_RATE_BOND:
                 self.r_swap = self.legs[0].coupon.coupon
                 self.notional = self.legs[0].princ
                 self.fixed_loc = 0
                 self.float_loc = 1
-            elif self.legs[1].instrument_type == intutil.rate_instruments.FIXED_RATE_BOND:
+            elif self.legs[1].instrument_type == intbase.rate_instruments.FIXED_RATE_BOND:
                 self.r_swap = self.legs[1].coupon.coupon
                 self.notional = self.legs[1].princ
                 self.fixed_loc = 1
@@ -217,8 +218,7 @@ class swap(fi_instrument):
             if reset is None:
                 self.reset = min_lg1
             else:
-                self.reset = intutil.convert_date_bdte(reset, options)
-                
+                self.reset = intdate.convert_date_bdte(reset, options)
 
             self.maturity = max(max_lg1, max_lg2)
 
@@ -232,9 +232,9 @@ class swap(fi_instrument):
             else:
                 self.is_fixed_payer = True
 
-            self.is_market_quote = (intutil.load_types.MARKET if\
+            self.is_market_quote = (intbase.load_types.MARKET if\
                                     is_market else
-                                    intutil.load_types.INTERPOLATED)
+                                    intbase.load_types.INTERPOLATED)
 
             if not self.reset.is_business_day() and\
                         'date_adjust' in options['control'].keys() and\
@@ -277,13 +277,13 @@ def build_swap(name, swap_dict, options, dbg=False):
     ''' Helper function -- Constructs SWAP from dictionary '''
     if swap_dict["type"].upper() == 'SWAP':
         princ = (swap_dict['princ'] if 'princ' in swap_dict.keys() else 1.0)
-        cpn_fixed = intutil.fixed_coupon(coupon=swap_dict['rate'],
+        cpn_fixed = intbase.fixed_coupon(coupon=swap_dict['rate'],
                                          frequency=swap_dict['frequency'])
 
         lg1 = fixed_coupon_bond('FIXED', swap_dict['reset_date'], swap_dict['date'],
                                 options, cpn_fixed, princ, dbg=dbg)
 
-        cpn_float = intutil.floating_coupon(reference_rate=swap_dict["reference_rate"],
+        cpn_float = intbase.floating_coupon(reference_rate=swap_dict["reference_rate"],
                                             frequency=swap_dict['frequency'])
 
         lg2 = floating_rate_bond("FLOATING", swap_dict['reset_date'], swap_dict['date'],
@@ -304,8 +304,8 @@ def build_swap(name, swap_dict, options, dbg=False):
 def apply_yield_forward_calcs(df, options):
     ''' Calculates spot, yield and forwards based on provides zeros
     '''
-    df = intutil.calc_yield_continuous(df, options)
-    df = intutil.calc_spot_simple(df, options)
-    df = intutil.calc_forward_rate(df, options)
+    df = intbase.calc_yield_continuous(df)
+    df = intbase.calc_spot_simple(df)
+    df = intbase.calc_forward_rate(df, options)
 
     return df
