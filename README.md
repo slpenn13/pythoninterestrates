@@ -1,4 +1,4 @@
-# pythoninterestrates (UNder Construction)
+# pythoninterestrates (Under Construction)
 Interest rate modeling tools
 Includes tools for fitting interest models, simulating  interest models and discounting instruments
 
