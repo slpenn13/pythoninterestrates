@@ -3,9 +3,11 @@
 # import businessdate as bdte
 import numpy as np
 import pandas as pd
+import scipy.optimize as sco
 import interest_rate_base as intbase
 import interest_rate_dates as intdate
-
+import interest_rate_hjm as inthjm
+import interest_rate_capfloor_convenience as intconv
 
 class fi_instrument():
     ''' initial fixed income / interest rate instrument class '''
@@ -55,27 +57,15 @@ class fi_instrument():
         count = intdate.calc_bdte_diff_int(maturity, start, self.options, princ, dbg=self.debug)
         # print(self.name, count)
 
-        if self.frequency.upper().startswith('M'):
-            per = 12*count
-        elif self.frequency.upper().startswith('Q'):
-            per = 4*count
-        elif self.frequency.upper().startswith('S'):
-            per = 12*count
-        elif self.frequency.upper().startswith('W'):
-            per = 52*count
-        elif self.frequency.upper().startswith('D'):
-            per = 365*count
-        else:
-            per = count
+        per = intdate.convert_period_count(count, self.frequency)
 
         if self.debug:
             print(start, per, self.frequency)
 
         mat = intdate.convert_date_bdte(maturity, self.options)
         sched = intdate.calc_schedule(start, per, self.options, self.frequency)
-        if not mat.is_business_day() and 'date_adjust' in self.options['control'].keys() and\
-                self.options['control']['date_adjust'] in ['follow']:
-            mat = mat.adjust(self.options['control']['date_adjust'])
+
+        mat = intdate.adjust_date_bd_convention(mat, self.options, False)
         sched = [itm for itm in sched if itm <= mat]
         return sorted(sched)
 
@@ -115,7 +105,8 @@ class fixed_coupon_bond(fi_instrument):
     '''
     instrument_type = intbase.rate_instruments.FIXED_RATE_BOND
 
-    def __init__(self, name, first, maturity, options, coupon, princ=1.0, dbg=False):
+    def __init__(self, name, first, maturity, options, coupon, princ=1.0,
+                 price=np.NAN, dated=None, dbg=False):
         ''' fixed coupon bond constructor
         name: str reference name used in identification upstream
         first: first cashflow date
@@ -134,13 +125,19 @@ class fixed_coupon_bond(fi_instrument):
 
         super().__init__(name, first, maturity, options, princ=princ,
                          frequency=self.coupon.frequency, dbg=dbg)
+
+        if dated is None:
+            self.dated = intdate.convert_date_bdte(first, self.options)
+        else:
+            self.dated = intdate.convert_date_bdte(dated, self.options)
+        self.maturity = max(self.schedule)
+        self.price = price
         self.generate_cf()
 
     def generate_cf(self):
-        max_date = np.max(self.schedule)
         for row in self.cash_flow_df.iterrows():
-            if self.schedule[0] < row[0]:
-                if max_date > row[0]:
+            if self.dated < row[0]:
+                if self.maturity > row[0]:
                     self.cash_flow_df.loc[row[0], 'CF'] =\
                             self.coupon.calc_coupon(row[1][1])*self.princ
                 else:
@@ -176,7 +173,8 @@ class swap(fi_instrument):
     ''' Simple swpa instruemnt that accepts legs as inputs'''
     instrument_type = intbase.rate_instruments.SWAP
 
-    def __init__(self, name, leg1, leg2, options, is_market=True, reset=None, dbg=False):
+    def __init__(self, name, leg1, leg2, options, is_market=True, t0_equal_T0=None,
+                 reset=None, dbg=False):
         ''' Swap constructor
         name: str determinig name of SWAP
         leg1: first leg in the swap
@@ -224,7 +222,8 @@ class swap(fi_instrument):
 
             super().__init__(name, self.reset, self.maturity, options, self.notional,
                              self.legs[0].coupon.frequency,
-                             columns=['maturity', 'time_diff', 'CF', 'CF_fixed', 'CF_floating'],
+                             columns=['maturity', 'time_diff', 'CF', 'CF_fixed', 'CF_floating',
+                                      'price'],
                              dbg=dbg)
 
             if 'is_fixed_payer' in self.options.keys():
@@ -232,14 +231,21 @@ class swap(fi_instrument):
             else:
                 self.is_fixed_payer = True
 
+            if t0_equal_T0 is None:
+                if 'start_date' in self.options.keys():
+                    dte = intdate.convert_date_bdte(self.options['start_date'], self.options)
+                    self.t0_equal_T0 = bool(dte == self.reset)
+                else:
+                    self.t0_equal_T0 = False
+            else:
+                self.t0_equal_T0 = t0_equal_T0
+
             self.is_market_quote = (intbase.load_types.MARKET if\
                                     is_market else
                                     intbase.load_types.INTERPOLATED)
 
-            if not self.reset.is_business_day() and\
-                        'date_adjust' in options['control'].keys() and\
-                        options['control']['date_adjust'] in ['follow']:
-                self.reset = self.reset.adjust(options['control']['date_adjust'])
+            self.reset = intdate.adjust_date_bd_convention(self.reset, self.options, self.debug)
+
         else:
             raise ValueError("Coupon payment dates are not congruent")
 
@@ -260,7 +266,10 @@ class swap(fi_instrument):
 
             for row in  self.legs[self.float_loc].cash_flow_df.iterrows():
                 if row[0] == self.reset and abs(row[1]['CF']) < 0.000001:
-                    self.cash_flow_df.loc[row[0], 'CF_floating'] = self.notional
+                    if self.t0_equal_T0:
+                        self.cash_flow_df.loc[row[0], 'price'] = self.notional
+                    else:
+                        self.cash_flow_df.loc[row[0], 'CF_floating'] = self.notional
                 else:
                     self.cash_flow_df.loc[row[0], 'CF_floating'] = row[1]['CF']
 
@@ -272,40 +281,320 @@ class swap(fi_instrument):
         else:
             raise ValueError("Cash flow matrix is not instantiated!!")
 
+    def calc_swap_strike_zeros(self, zeros=None, update=False):
+        ''' calculatules ATM strike for swap
+        zeros: df including zolumn zero used to discount cash flows
+        '''
+        numer = (zeros.loc[self.reset, 'zero'] - zeros.loc[self.maturity, 'zero'])
+        # print(type(zeros.index[0]), type(self.reset), type(self.maturity))
+        ind = np.logical_and(zeros.index > self.reset,
+                             zeros.index <= self.maturity)
 
-def build_swap(name, swap_dict, options, dbg=False):
-    ''' Helper function -- Constructs SWAP from dictionary '''
-    if swap_dict["type"].upper() == 'SWAP':
-        princ = (swap_dict['princ'] if 'princ' in swap_dict.keys() else 1.0)
-        cpn_fixed = intbase.fixed_coupon(coupon=swap_dict['rate'],
-                                         frequency=swap_dict['frequency'])
+        denom = zeros.loc[ind, 'zero'].dot(zeros.loc[ind, 'date_diff'])
+        if self.debug:
+            print(zeros.loc[ind, 'zero'])
+            print(zeros.loc[ind, 'date_diff'])
+            print("Strike (zeros): numer %f denom %f (len(ind %d)) " % (
+                numer, denom, ind.sum()))
 
-        lg1 = fixed_coupon_bond('FIXED', swap_dict['reset_date'], swap_dict['date'],
-                                options, cpn_fixed, princ, dbg=dbg)
+        res = numer / denom
+        if update and np.isfinite(res):
+            if self.debug:
+                print("Warning -- updating r_swap and cash flows")
+            self.r_swap = res
+            self.legs[self.fixed_loc].coupon.coupon = res
+            self.legs[self.fixed_loc].generate_cf()
+            self.update_cash_df()
 
-        cpn_float = intbase.floating_coupon(reference_rate=swap_dict["reference_rate"],
-                                            frequency=swap_dict['frequency'])
 
-        lg2 = floating_rate_bond("FLOATING", swap_dict['reset_date'], swap_dict['date'],
-                                 options, cpn_float, princ, dbg)
+        return res
 
-        if 'is_market' in swap_dict.keys():
-            is_market = bool(int(swap_dict['is_market']) > 0)
+    def calc_swap_strike_forwards(self, zeros=None, update=False):
+        ''' calculates swap strike as weighted average of forward curve '''
+        ind = np.logical_and(zeros.matrix.index > self.reset,
+                             zeros.matrix.index <= self.maturity)
+        res = np.average(zeros.matrix.loc[ind, 'forward'], weights=zeros.matrix.loc[ind, 'zero'])
+
+        if update and np.isfinite(res):
+            if self.debug:
+                print("Warning -- updating r_swap and cash flows")
+            self.r_swap = res
+            self.legs[self.fixed_loc].coupon.coupon = res
+            self.legs[self.fixed_loc].generate_cf()
+            self.update_cash_df()
+
+        return res
+
+class caplet(fi_instrument):
+    ''' caplet class '''
+    instrument_type = intbase.rate_instruments.CAPLET
+
+    def __init__(self, name, strike, maturity, reset, options, is_floor=False, princ=1.0,
+                 frequency='Y', dbg=False):
+        ''' Caplet constructor
+        name: name of capletshort_rate_model as  short_rate
+        strike: strike applied in pay-off lambda function
+        maturity: maturity of caplet
+        reset: reset of caplet
+        options: control dctionary (must include control in keys())
+        is_floor: determines whether caplet is caplet cap or caplet floor (determines pay-off)
+        princ: principal applied to pay-off
+        frequency: period between reset and maturity
+        dbg: determines whether to output debugf information
+        '''
+        if options is not None and isinstance(options, dict) and 'control' in options.keys():
+            self.reset = reset
+            self.maturity = intdate.adjust_date_bd_convention(maturity, options, dbg)
+            super().__init__(name, self.reset, self.maturity, options, princ=princ,
+                             frequency=frequency,
+                             columns=['maturity', 'time_diff', 'CF', 'CF_fixed', 'CF_floating'],
+                             dbg=dbg)
+
+            self.strike = strike
+            if is_floor is None:
+                self.is_floor = False
+                self.calc_CF = lambda x: (x if x <= self.strike else self.strike)
+            else:
+                self.is_floor = is_floor
+                if self.is_floor:
+                    self.calc_CF = lambda x: (x if x >= self.strike else self.strike)
+                else:
+                    self.calc_CF = lambda x: (x if x <= self.strike else self.strike)
         else:
-            is_market = True
+            raise ValueError("Options fails criteria for caplet construction")
+
+        self.generate_cf()
+
+    def generate_cf(self):
+        ''' generates initial cap let cash flow '''
+        mult = (-1.0 if self.is_floor else 1.0)
+        self.cash_flow_df.loc[self.maturity.to_date(), 'CF_fixed'] = mult*self.princ*self.strike
+
+    def price_caplet(self, t1, t2, zero_t1, zero_t2, mdl=None, kappa=None, sigma=None):
+        ''' pricer -- accepts model override (mdl)'''
+        if isinstance(mdl, inthjm.hjm_model):
+            price = mdl.calc_price_caplet(self.strike, t1, t2,
+                                          zero_t1, zero_t2,
+                                          kappa=kappa, sigma=sigma)
+        else:
+            if isinstance(mdl, str) and mdl.lower().startswith('bache'):
+                price = intconv.calc_price_bachelier_caplet(self.strike, t1, t2, zero_t1,
+                                                            zero_t2, sigma, dbg=self.debug)
+
+            else:
+                if self.debug:
+                    print("Warning using simple caplet pricing")
+                    if kappa is not None:
+                        print("Warning kappa not used in simple caplet calculation")
+                price = intconv.calc_price_black_caplet(self.strike, t1, t2, zero_t1,
+                                                        zero_t2, sigma, dbg=self.debug)
+
+        return price
+
+    def vega_caplet(self, t1, t2, zero_t1, zero_t2, mdl=None, sigma=None, dbg=False):
+        ''' calculate vega for caplet '''
+
+        dbg = (self.debug or dbg)
+        if isinstance(mdl, inthjm.hjm_model):
+            if self.debug:
+                print("Warning -- vega calculation implemented HJM ")
+        else:
+            if isinstance(mdl, str) and mdl.upper().startswith("BACHE"):
+                vega = intconv.calc_vega_bachelier_caplet(self.strike, t1, t2, zero_t1,
+                                                          zero_t2, sigma, dbg=dbg)
+            else:
+                vega = intconv.calc_vega_black_caplet(self.strike, t1, t2, zero_t1, zero_t2,
+                                                      sigma, dbg=dbg)
+
+        return vega
+
+class cap(fi_instrument):
+    ''' cap structure -- based on dictionary of caplets '''
+    instrument_type = intbase.rate_instruments.CAP
+
+    def __init__(self, name, strike, maturity, reset, options, princ=1.0, frequency='Y',
+                 dbg=False):
+        ''' cap constructor '''
+
+        self.reset = reset
+        self.maturity = intdate.adjust_date_bd_convention(maturity, options, dbg)
+        self.caplet = {}
+        self.sched = None
+        super().__init__(name, self.reset, self.maturity, options, princ=princ,
+                         frequency=frequency,
+                         columns=['maturity', 'time_diff', 'CF', 'CF_fixed', 'CF_floating'],
+                         dbg=dbg)
+
+        self.strike = 0.01*strike
+        self.apply_schedule()
 
 
-        swap_final = swap(name, lg1, lg2, options, is_market, swap_dict['reset_date'], dbg=dbg)
-    else:
-        raise ValueError("Dict type muyst be swap")
+    def calc_schedule(self):
+        ''' calculates unadjsuted BusinessDate schedule'''
+        if self.sched is None:
+            periods = intdate.calc_bdte_diff_int(self.maturity, self.reset, self.options,
+                                                 dbg=self.debug)
 
-    return swap_final
+            per = intdate.convert_period_count(periods, self.frequency)
 
-def apply_yield_forward_calcs(df, options):
-    ''' Calculates spot, yield and forwards based on provides zeros
-    '''
-    df = intbase.calc_yield_continuous(df)
-    df = intbase.calc_spot_simple(df)
-    df = intbase.calc_forward_rate(df, options)
+            reset = intdate.convert_date_bdte(self.reset, self.options)
+            self.sched = intdate.calc_schedule(reset, per, options=None,
+                                               period=self.frequency)
+            self.sched = [itm for itm in self.sched if itm <= self.maturity]
+            if self.debug:
+                print(per, periods, (0 if self.sched is None else len(self.sched)))
 
-    return df
+    def apply_schedule(self):
+        ''' calculates schedule of caplets and stores in caplets dictionary '''
+        if self.sched is None:
+            self.calc_schedule()
+
+        reset = self.reset
+
+        for loc, dte in zip(np.arange(0, len(self.sched)), self.sched):
+            name = "".join(["CAPLET", str(loc)])
+            if loc > 0:
+                self.caplet[name] = caplet(name, self.strike, dte, reset, self.options,
+                                           is_floor=False, princ=self.princ,
+                                           frequency=self.frequency, dbg=False)
+
+            reset = dte
+
+    def price_cap(self, zeros, sigma=None, kappa=None, hjm_model=None):
+        ''' calculates cap price as sum of caplet prices
+        hjm_model: type(hjm_model) == 'hjm_model'
+        zeros: DataFrame with one column zero coupon bond prices
+        sigma: can be left None, if set overrides model parameter
+        kappa: can be left None, if set overrides model parameter
+        '''
+        result = 0.0
+
+        for itm in self.caplet.values():
+            zero_t1 = zeros.loc[itm.cash_flow_df.index[0], 'zero']
+
+            result += itm.price_caplet(itm.cash_flow_df.iloc[0, 0],
+                                       itm.cash_flow_df.iloc[1, 0], zero_t1,
+                                       zeros.loc[itm.cash_flow_df.index[1], 'zero'],
+                                       hjm_model, sigma=sigma, kappa=kappa)
+
+        return result
+
+    def price_cap_solver(self, sigma, zeros, price=0.0, kappa=None, hjm_model=None, dbg=False):
+        ''' cap price calculator '''
+        dbg = (dbg or self.debug)
+        result = self.price_cap(zeros, sigma=sigma, kappa=kappa, hjm_model=hjm_model)
+        if dbg:
+            print("sigma %.8f target %f Value %.8f Diff %.8f" % (
+                sigma, price, result, (price - result)))
+
+        return price - result
+
+    def calc_implied_volatility(self, zeros, price=0.0, left=0.0005, right=2.0, tol=1.e-5,
+                                hjm_model=None, dbg=False):
+        ''' calculates implied volatility for given price '''
+        xresult = sco.brentq(self.price_cap_solver, left, right, args=(
+            zeros, price, None, hjm_model, dbg), full_output=True)
+
+        if dbg:
+            print(xresult)
+
+        return xresult[0]
+
+    def vega_cap(self, zeros, sigma=None, kappa=None, hjm_model=None, dbg=False):
+        ''' calculates vega for cap as sum of caplet vegas '''
+        result = 0.0
+
+        dbg = (self.debug or dbg)
+        for itm in self.caplet.values():
+            result += itm.vega_caplet(itm.cash_flow_df.iloc[0, 0],
+                                      itm.cash_flow_df.iloc[1, 0],
+                                      zeros.loc[itm.cash_flow_df.index[0], 'zero'],
+                                      zeros.loc[itm.cash_flow_df.index[1], 'zero'],
+                                      hjm_model, sigma=sigma, dbg=dbg)
+
+        return result
+
+
+class interest_rate_future(fi_instrument):
+    ''' interest futures calculation '''
+    instrument_type = intbase.rate_instruments.FUTURE
+
+    def __init__(self, name, futures_rate, maturity, reset, frequency, options, dbg=False):
+        ''' constructor '''
+        self.futures_rate = futures_rate
+        self.rate = intbase.futures_rate(futures_rate)
+        self.options = options.copy()
+        self.reset = intdate.convert_date_bdte(reset, self.options)
+        self.maturity = intdate.convert_date_bdte(maturity, self.options)
+
+        super().__init__(name, self.reset, self.maturity, self.options, princ=1.0,
+                         frequency=frequency, columns=['maturity', 'time_diff', 'CF', 'price'],
+                         dbg=dbg)
+
+        self.spot = self.calc_futures_spot()
+        self.generate_cf()
+
+    def __repr__(self):
+        mat = "-".join([str(self.maturity.year), str(self.maturity.month), str(self.maturity.day)])
+        reset = "-".join([str(self.reset.year), str(self.reset.month), str(self.reset.day)])
+
+        res = " ".join([self.name, "Maturity", mat, "Reset", reset, "Futures",
+                        str(round(self.futures_rate, 4)), "Spot", str(round(self.spot, 4))])
+
+        return res
+
+    def generate_cf(self):
+        ''' generates initial futures cash flow '''
+
+        self.cash_flow_df.loc[self.reset.to_date(), 'CF'] = self.princ*-1.0
+        self.calc_futures_payoff()
+
+    def calc_futures_spot(self):
+        ''' calculate spot rate '''
+        spot = np.NAN
+        proj_date = intdate.calc_schedule(self.reset, 1, self.options, period=self.frequency)
+        proj_date_fnl = max(proj_date)
+
+        if abs(proj_date_fnl - self.maturity) > intdate.bdte.BusinessPeriod(days=2):
+            if self.debug:
+                print("Futures -- date mismatch: maturity %s projeted %s" % (
+                    self.maturity.to_date(), proj_date_fnl.to_date()))
+
+            diff = self.reset.get_day_count(proj_date_fnl, self.options['control']['convention'])
+        else:
+            diff = self.reset.get_day_count(self.maturity, self.options['control']['convention'])
+
+        spot = (1./diff)*self.rate
+
+        return spot
+
+    def calc_futures_payoff(self, maturity=None):
+        ''' calculate futures payoff given updated maturity as year fraction '''
+
+        if maturity and isinstance(maturity, (str, intdate.bdte.BusinessDate, intdate.dt.date)):
+            mat = intdate.convert_date_bdte(maturity, self.options)
+        else:
+            mat = self.maturity
+
+        mult = 0.01*intdate.calc_bdte_diff(mat, self.options, self.reset)
+
+        if mat != max(self.cash_flow_df.index):
+            print("Warning -- mismatch %s %s  shape %d" % (
+                mat.to_date(), max(self.cash_flow_df.index), self.cash_flow_df.shape[0]))
+            if self.cash_flow_df.shape[0] == 1:
+                self.cash_flow_df.loc[mat.to_date(), 'maturity'] =\
+                    intdate.calc_bdte_diff(mat, self.options)
+            elif self.cash_flow_df.shape[0] == 2:
+                self.cash_flow_df.index = [self.reset.to_date(), mat.to_date()]
+                self.cash_flow_df.loc[mat.to_date(), 'maturity'] =\
+                    intdate.calc_bdte_diff(mat, self.options)
+
+            else:
+                raise ValueError("Faulty dimansions for futures contract")
+
+            self.cash_flow_df.loc[mat.to_date(), 'time_diff'] =\
+                self.cash_flow_df.loc[mat.to_date(), 'maturity'] -\
+                    self.cash_flow_df.loc[self.reset.to_date(), 'maturity']
+
+        self.cash_flow_df.loc[mat.to_date(), 'CF'] = self.princ +\
+            mult*self.princ*self.spot

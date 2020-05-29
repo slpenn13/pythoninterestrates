@@ -2,7 +2,6 @@
 import datetime as dt
 import businessdate as bdte
 import numpy as np
-import pandas as pd
 
 
 def convert_date_bdte(date, options):
@@ -75,6 +74,49 @@ def adjust_diff_to_int(diff, tol):
         diff_final = int(np.ceil(diff))
     return diff_final
 
+def adjust_date_bd_convention(date, options, dbg=False):
+    ''' adjusts dates based on business date convention '''
+    if isinstance(date, bdte.BusinessDate):
+        date_fnl = date
+    else:
+        if dbg:
+            print("Warning -- date is being converted")
+        date_fnl = convert_date_bdte(date, options)
+
+    if not date_fnl.is_business_day() and\
+            'date_adjust' in options['control'].keys() and\
+            options['control']['date_adjust'] in ['follow', 'flw', 'modified']:
+        date_fnl = date_fnl.adjust(options['control']['date_adjust'])
+
+    return date_fnl
+
+def convert_period_to_year(period, options):
+    ''' converts period / frequency to year (float)'''
+    if period.upper().startswith('M'):
+        per = 1/12.
+    elif period.upper().startswith('Q'):
+        per = 0.25
+    elif period.upper().startswith('S'):
+        per = 0.50
+    elif period.upper().startswith('W'):
+        per = 1/52.
+    elif period.upper().startswith('D'):
+        if isinstance(options, dict) and 'control' in options.keys() and\
+                'convention' in options['control'].keys():
+            if options['control']['convention'].endswith('365'):
+                per = 1/365.
+            else:
+                per = 1/360.
+        else:
+            per = 1/360.0
+    elif period.upper().startswith('Y'):
+        per = 1.0
+    else:
+        per = 0.0
+
+    return per
+
+
 def convert_period(period='Y'):
     '''converts JSON period into BusinessDate period '''
     if period.upper().startswith('M'):
@@ -89,6 +131,23 @@ def convert_period(period='Y'):
         per = bdte.BusinessPeriod(days=1)
     else:
         per = bdte.BusinessPeriod(years=1)
+
+    return per
+
+def convert_period_count(count, periods='Y'):
+    ''' converts JSON period count plus num periods '''
+    if periods.upper().startswith('M'):
+        per = 12*count
+    elif periods.upper().startswith('Q'):
+        per = 4*count
+    elif periods.upper().startswith('S'):
+        per = 12*count
+    elif periods.upper().startswith('W'):
+        per = 52*count
+    elif periods.upper().startswith('D'):
+        per = 365*count
+    else:
+        per = count
 
     return per
 
@@ -123,7 +182,8 @@ def calc_schedule(start, count, options, period='Y'):
 
     # sched = bdte.BusinessSchedule(strt_fnl, stp_fnl, per)
     sched = bdte.BusinessSchedule(strt_fnl, stp_fnl, per)
-    if 'control' in options.keys() and 'date_adjust' in options['control'].keys() and\
+    if  options is not None and 'control' in options.keys() and\
+            'date_adjust' in options['control'].keys() and\
             options['control']['date_adjust'] in ['follow', 'flw', 'modified']:
         sched.adjust(options['control']['date_adjust'])
 
@@ -188,3 +248,36 @@ def constuct_schedule(dates, options, position, start, stop, count, period='Y'):
         dates[position + loc] = dt.datetime(date_final.year, date_final.month, date_final.day,
                                             0, 0)
     return dates
+
+def generate_schedule_dict(start=None, period='Y', count=0, date_format="%Y-%m-%d",
+                           convention='30360', date_adjust='follow'):
+    ''' helper function: generates system compliant schedule scpecification '''
+
+    res_dict = {}
+    res_dict['control'] = {}
+    res_dict['control']['convention'] = convention
+    res_dict['control']['date_adjust'] = date_adjust
+    res_dict['control']['date_format'] = date_format
+
+    if start is None:
+        base_date = dt.date.today()
+    elif isinstance(start, (dt.date, dt.datetime, str, bdte.BusinessDate)):
+        base_date = start
+    else:
+        raise ValueError("Faulty Starting Date")
+
+    strt = convert_date_bdte(base_date, res_dict)
+    res_dict['frequency'] = period
+    if count and isinstance(count, (int, float)):
+        res_dict['count'] = int(count)
+        res_dict['start'] = strt
+    elif count and isinstance(count, (dt.date, dt.datetime, str, bdte.BusinessDate)):
+        res_dict['end'] = convert_date_bdte(count, res_dict)
+        res_dict['start'] = strt
+    elif count and isinstance(count, list) and isinstance(count[0], bdte.BusinessDate):
+        res_dict['schedule'] = []
+        if strt not in count:
+            res_dict['schedule'].append(strt)
+        res_dict['schedule'].extend(count)
+
+    return res_dict

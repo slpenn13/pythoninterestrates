@@ -3,10 +3,10 @@
 import numpy as np
 from scipy.stats import norm as norm_dist
 # import pandas as pd
-from interest_rate_base import short_rate_model as  short_rate
+from interest_rate_hjm import hjm_model
 
 
-class short_rate_vasicek(short_rate):
+class short_rate_vasicek(hjm_model):
     ''' implementation of Vasicek Short Rate Model '''
     def __init__(self, kappa, theta, sigma, r0, norm_method, dbg=False):
         ''' Vasicek implementation of short rate model '''
@@ -14,7 +14,7 @@ class short_rate_vasicek(short_rate):
         self.debug = dbg
 
         if self.debug:
-            print("kappa %f theta %f sigma %f r0 %f" % (kappa, theta, sigma, r0))
+            self.__repr__()
 
     def price_zero(self, t):
         ''' calculates zero coupon bond price for time t in Vasicek SRM '''
@@ -88,3 +88,47 @@ class short_rate_vasicek(short_rate):
             print("Price European Put p0 %f p1 %f price %f" % (p0, p1, (p0 - p1)))
 
         return p0 - p1
+
+    def calc_di_caplet(self, strike, t1, t2, zero_t1, zero_t2, kappa=None, sigma=None):
+        ''' calculates simple black d_i '''
+        params = {}
+
+        if sigma is not None and isinstance(sigma, float) and not np.isnan(sigma):
+            params['sigma'] = sigma
+        elif sigma is not None and isinstance(sigma, (list, np.ndarray)) and\
+                all(np.logical_not(np.isnan(sigma))):
+            params['sigma'] = sigma.copy()
+        else:
+            params['sigma'] = self.params['sigma']
+
+        if kappa is not None and isinstance(kappa, float) and not np.isnan(kappa):
+            params['kappa'] = kappa
+
+        elif kappa is not None and isinstance(kappa, (list, np.ndarray)) and\
+                all(np.logical_not(np.isnan(kappa))):
+            params['kappa'] = kappa.copy()
+        else:
+            params['kappa'] = self.params['kappa']
+
+        v_norm = self.calc_norm_v(t=0, t0=t1, t1=t2, params=params, dbg=self.debug)
+
+        res = np.log((zero_t2/zero_t1)*(1. + (t2-t1)*strike))
+        d1 = (res + 0.5*v_norm) / np.sqrt(v_norm)
+        d2 = (res - 0.5*v_norm) / np.sqrt(v_norm)
+        if self.debug:
+            print("Di Caplet -- res %f v_norm %f d1 %f d2 %f " % (res, v_norm, d1, d2))
+
+        return d1, d2
+
+    def calc_price_caplet(self, strike, t1, t2, zero_t1, zero_t2, kappa=None, sigma=False):
+        ''' calculates caplet price '''
+        mult = 1. + (t2 - t1)*strike
+        d1, d2 = self.calc_di_caplet(strike, t1, t2, zero_t1, zero_t2, kappa, sigma)
+        p1 = zero_t1*norm_dist.cdf(-d2)
+
+        p2 = mult*zero_t2*norm_dist.cdf(-d1)
+
+        if self.debug:
+            print("Caplet: p1 %f p2 %f cpl %f " % (p1, p2, (p1-p2)))
+
+        return p1 - p2

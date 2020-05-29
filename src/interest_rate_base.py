@@ -17,6 +17,10 @@ class rate_instruments(Enum):
     FIXED_RATE_BOND = 6
     FLOATING_RATE_BOND = 7
     ZERO_COUPON = 8
+    CAPLET = 9
+    CAP = 10
+    FLOOR = 11
+    SWAPTION = 12
 
     def __eq__(self, other):
         # print(self.value, other, type(other))
@@ -133,6 +137,19 @@ def calc_yield_continuous(df):
 
     return df
 
+def convert_annual_yield(yield_annual, period=1, mult=0.01):
+    ''' converts annual yield to semi annual yield in case of 2 '''
+    if period == 2:
+        yld = 200.*(np.sqrt(1 + mult*yield_annual) - 1)
+    else:
+        yld = yield_annual
+    
+    return yld
+
+def calc_spot_simple_1d(zero, maturity, mult=1.0):
+    ''' Calculates simple spot rate based on zero and maturity '''
+    return mult*(1. / zero - 1.) / maturity
+
 def calc_spot_simple(df):
     ''' calculates simple spot rate based on perviously calculated zero coupon '''
     if df is not None and isinstance(df, pd.DataFrame) and np.all(df.shape):
@@ -141,6 +158,16 @@ def calc_spot_simple(df):
         raise ValueError("df must be valid dataframe")
 
     return df
+
+def calc_forward_rate_1d(t1, t2, zero_t1, zero_t2, mult=1.0):
+    ''' calculates forward rate based on two consecutive zeros
+    t1: maturity of first zero
+    t2: maturity of second zero
+    zero_t1: first zero coupon bond -- maturity t1
+    zero_t2: second zero coupon bond -- maturity t2
+    mult: multiple of result (def: 1.) 100. produces results in percent
+    '''
+    return (mult/(t2 - t1))*(zero_t1/zero_t2 - 1.)
 
 def calc_forward_rate(df, options):
     ''' calculates simple forward rates based on previously calculated zero coupon '''
@@ -182,34 +209,6 @@ def calc_forward_rate(df, options):
         raise ValueError("df must be valid dataframe")
 
     return df
-
-class short_rate_model():
-    ''' base class corresponding to mean reverting short rate model '''
-
-    def __init__(self, kappa, theta, sigma, r0, calc_norm_method=None):
-        ''' constructor
-        '''
-        self.kappa = kappa
-        self.theta = theta
-        self.sigma = sigma
-        self.r0 = r0
-        self.params = {'kappa': self.kappa, 'theta': self.theta, 'sigma': sigma, 'r0': self.r0}
-
-        if calc_norm_method is None:
-            raise ValueError("No calc norm method provided")
-        self.calc_norm_method = calc_norm_method
-
-    def __repr__(self):
-        ''' print elements of short rate_model '''
-        print("Kappa %f Theta %f Sigma %f r0 %f" %(self.kappa, self.theta, self.sigma, self.r0))
-
-    def calc_norm_v(self, **kwargs):
-        ''' calc norm method '''
-        t = (kwargs['t'] if 't' in kwargs.keys() else 0.0)
-        t0 = (kwargs['t0'] if 't0' in kwargs.keys() else 0.0)
-        t1 = (kwargs['t1'] if 't1' in kwargs.keys() else 0.0)
-        dbg = (kwargs['dbg'] if 'dbg' in kwargs.keys() else False)
-        return self.calc_norm_method(t=t, t0=t0, t1=t1, params=self.params, dbg=dbg)
 
 
 class coupon():

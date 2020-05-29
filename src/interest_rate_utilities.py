@@ -26,8 +26,8 @@ def build_arrays(options, dbg=False):
 def apply_yield_forward_calcs(df, options):
     ''' Calculates spot, yield and forwards based on provides zeros
     '''
-    df = intbase.calc_yield_continuous(df, options)
-    df = intbase.calc_spot_simple(df, options)
+    df = intbase.calc_yield_continuous(df)
+    df = intbase.calc_spot_simple(df)
     df = intbase.calc_forward_rate(df, options)
 
     return df
