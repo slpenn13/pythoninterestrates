@@ -11,6 +11,7 @@ class discount_data(IntEnum):
     ZERO = 0
     FORWARD = 1
     YIELD = 2
+    PRICES = 3
 
 
 class discount_calculator():
@@ -22,10 +23,11 @@ class discount_calculator():
         else:
             columns = ['maturity', 'date_diff', 'zero', 'forward', 'yield']
 
+        if data_type == discount_data.PRICES:
+            columns.append("yield_hat")
+
         self.rowcount = len(rates)+1
         self.debug = dbg
-        mult = 100.0  # calculate results in percents
-        self.matrix = pd.DataFrame(np.zeros([self.rowcount, len(columns)]), columns=columns)
 
         if isinstance(dates, dict):
             self.date_spec = dates.copy()
@@ -40,52 +42,82 @@ class discount_calculator():
             self.schedule = sorted(self.date_spec['schedule'])
         else:
             raise ValueError("discount calculator: NO schedule generated")
+        # self.matrix.index = self.schedule
+
+        self.matrix = pd.DataFrame(np.zeros([self.rowcount, len(columns)]), columns=columns,
+                                   index=self.schedule)
 
         if data_type == discount_data.ZERO:
-            for i in np.arange(0, self.matrix.shape[0]):
-                if i == 0:
-                    self.matrix.loc[i, 'zero'] = 1.0
-                else:
-                    self.matrix.loc[i, 'zero'] = rates[i-1]
-                    self.matrix.loc[i, 'maturity'] = intdate.calc_bdte_diff(
-                        self.schedule[i], self.date_spec, self.schedule[0])
-
-                    self.matrix.loc[i, 'date_diff'] = intdate.calc_bdte_diff(
-                        self.schedule[i], self.date_spec, self.schedule[i-1])
-                    self.matrix.loc[i, 'forward'] = intbase.calc_forward_rate_1d(
-                        self.matrix.loc[(i-1), 'maturity'], self.matrix.loc[i, 'maturity'],
-                        self.matrix.loc[(i-1), 'zero'], self.matrix.loc[i, 'zero'], mult)
-
-                    self.matrix.loc[i, 'yield'] = mult*(-1.)*np.log(self.matrix.loc[i, 'zero'])/\
-                        self.matrix.loc[i, 'maturity']
+            self.init_zero(rates)
         elif data_type == discount_data.FORWARD:
-            for i in np.arange(0, self.matrix.shape[0]):
-                if i == 0:
-                    self.matrix.loc[i, 'zero'] = 1.0
-                else:
-                    self.matrix.loc[i, 'forward'] = rates[i-1]
-                    self.matrix.loc[i, 'maturity'] = intdate.calc_bdte_diff(
-                        self.schedule[i], self.date_spec, self.schedule[0])
-
-                    self.matrix.loc[i, 'date_diff'] = intdate.calc_bdte_diff(
-                        self.schedule[i], self.date_spec, self.schedule[i-1])
-                    self.matrix.loc[i, 'zero'] = intbase.calc_forward_zero_coupon(
-                        self.matrix.loc[i, 'forward'], self.matrix.loc[i, 'date_diff'],
-                        self.matrix.loc[(i-1), 'zero'])
-
-                    self.matrix.loc[i, 'yield'] = mult*(-1)*np.log(self.matrix.loc[i, 'zero'])/\
-                        self.matrix.loc[i, 'maturity']
+            self.init_forward(rates)
+        elif data_type == discount_data.YIELD:
+            self.init_yields(rates)
+        elif data_type == discount_data.PRICES:
+            self.init_prices(rates)
         else:
             raise ValueError("Vector type not supported")
 
-        self.matrix.index = self.schedule
+        self.parse_origin(origin)
 
+    def parse_origin(self, origin):
+        ''' Parses origin input '''
         if origin is not None and isinstance(origin, list):
             for indx in self.matrix.index:
                 if indx in origin:
                     self.matrix.loc[indx, 'origin'] = 1
                 else:
                     self.matrix.loc[indx, 'origin'] = 2
+
+    def init_zero(self, rates):
+        ''' initializes structure in the case of zeros '''
+        mult = 100.0  # calculate results in percents
+
+        for i in np.arange(0, self.matrix.shape[0]):
+            if i == 0:
+                self.matrix.loc[i, 'zero'] = 1.0
+            else:
+                self.matrix.loc[i, 'zero'] = rates[i-1]
+                self.matrix.loc[i, 'maturity'] = intdate.calc_bdte_diff(
+                    self.schedule[i], self.date_spec, self.schedule[0])
+
+                self.matrix.loc[i, 'date_diff'] = intdate.calc_bdte_diff(
+                    self.schedule[i], self.date_spec, self.schedule[i-1])
+                self.matrix.loc[i, 'forward'] = intbase.calc_forward_rate_1d(
+                    self.matrix.loc[(i-1), 'maturity'], self.matrix.loc[i, 'maturity'],
+                    self.matrix.loc[(i-1), 'zero'], self.matrix.loc[i, 'zero'], mult)
+
+                self.matrix.loc[i, 'yield'] = mult*(-1.)*np.log(self.matrix.loc[i, 'zero'])/\
+                    self.matrix.loc[i, 'maturity']
+
+    def init_forward(self, rates):
+        ''' inittializes structure in the case of forwards '''
+        mult = 100.0  # calculate results in percents
+
+        for i in np.arange(0, self.matrix.shape[0]):
+            if i == 0:
+                self.matrix.loc[i, 'zero'] = 1.0
+            else:
+                self.matrix.loc[i, 'forward'] = rates[i-1]
+                self.matrix.loc[i, 'maturity'] = intdate.calc_bdte_diff(
+                    self.schedule[i], self.date_spec, self.schedule[0])
+
+                self.matrix.loc[i, 'date_diff'] = intdate.calc_bdte_diff(
+                    self.schedule[i], self.date_spec, self.schedule[i-1])
+                self.matrix.loc[i, 'zero'] = intbase.calc_forward_zero_coupon(
+                    self.matrix.loc[i, 'forward'], self.matrix.loc[i, 'date_diff'],
+                    self.matrix.loc[(i-1), 'zero'])
+
+                self.matrix.loc[i, 'yield'] = mult*(-1)*np.log(self.matrix.loc[i, 'zero'])/\
+                    self.matrix.loc[i, 'maturity']
+
+    def init_prices(self, prices):
+        ''' Shell '''
+        raise ValueError("Type prices not supported for base discount calculator")
+
+    def init_yields(self, rates):
+        ''' Shell '''
+        raise ValueError("Type yields not supported for base discount calculator")
 
     def status(self):
         ''' determines health of matrix '''

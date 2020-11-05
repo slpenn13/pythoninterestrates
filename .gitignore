@@ -1,5 +1,3 @@
-# Exclude vim swap files
-/src/.*.sw[po]
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -129,3 +127,11 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+
+# VIM
+*.sw[op]
+src/tags
+bin/tags
+tracking/tags
+./tags

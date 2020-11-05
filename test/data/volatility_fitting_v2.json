@@ -1,12 +1,12 @@
 {
     "count": 17,
-    "control": {"count": 17, "convention": "act_360", "columns": [
+    "control": {"count": 17, "convention": "30360", "columns": [
         "maturity", "rate", "zero", "type", "origin", "spot", "yield", "forward", "loaded"], 
-        "date_format": "%Y-%m-%d", "split": "-", "date_adjust": "follow",
+        "date_format": "%Y-%m-%d", "split": "-", "date_adjust": "none",
         "date_tol": 0.12, "append_reset": 0 },
     "forward_references": {"2013-10-13": ""}, 
     "instruments": {
-        "LIBOR1": {"type": "LIBOR", "rate": 0.3430, "date": "2013-04-02"},
+        "LIBOR1": {"type": "LIBOR", "rate": 0.3430, "date": "2013-04-01"},
         "SWAP1" : {"type": "swap", "rate": 0.4420, "date": "2013-10-01", "reset_date": "2013-04-01",
                  "frequency": "S", "reference_rate": "LIBOR", "is_fixed_payer": 1},
         "SWAP2" : {"type": "swap", "rate": 0.6260, "date": "2014-10-01", "reset_date": "2013-04-01",
@@ -15,7 +15,7 @@
                  "frequency": "S", "reference_rate": "LIBOR", "is_fixed_payer": 1},
         "SWAP4" : {"type": "swap", "rate": 1.1191, "date": "2016-10-03", "reset_date": "2013-04-01",
                  "frequency": "S", "reference_rate": "LIBOR", "is_fixed_payer": 1},
-        "SWAP5": {"type": "swap", "rate": 1.3650, "date": "2017-10-02", "reset_date": "2013-04-01",
+        "SWAP5": {"type": "swap", "rate": 1.3650, "date": "2017-10-01", "reset_date": "2013-04-01",
                  "frequency": "S", "reference_rate": "LIBOR", "is_fixed_payer": 1},
         "SWAP6": {"type": "swap", "rate": 1.5750, "date": "2018-10-01", "reset_date": "2013-04-01",
                  "frequency": "S", "reference_rate": "LIBOR", "is_fixed_payer": 1},
@@ -35,20 +35,21 @@
             "frequency": "S", "reference_rate": "LIBOR", "is_fixed_payer": 1}
     },
     "cap_prices": {
-        "CAP1": {"date": "2013-10-01", "price": 0.0012},
-        "CAP2": {"date": "2014-10-01", "price": 0.0046},
-        "CAP3": {"date": "2015-10-01", "price": 0.0092},
-        "CAP4": {"date": "2016-10-03", "price": 0.0148},
-        "CAP5": {"date": "2017-10-02", "price": 0.0210},
-        "CAP6": {"date": "2018-10-01", "price": 0.0278},
-        "CAP7": {"date": "2019-10-01", "price": 0.0349},
-        "CAP8": {"date": "2020-10-01", "price": 0.0417},
-        "CAP9": {"date": "2021-10-01", "price": 0.0490},
-        "CAP10": {"date": "2022-10-03", "price": 0.0565},
-        "CAP15": {"date": "2027-10-01", "price": 0.0904},
-        "CAP20": {"date": "2032-10-01", "price": 0.1196},
-        "CAP30": {"date": "2042-10-01", "price": 0.1686}
+        "CAP1": {"date": "2013-10-01", "price": 0.0012, "strike": 0.54, "volatility": 170.52},
+        "CAP2": {"date": "2014-10-01", "price": 0.0046, "strike": 0.72, "volatility": 113.62},
+        "CAP3": {"date": "2015-10-01", "price": 0.0092, "strike": 0.97, "volatility": 76.52},
+        "CAP4": {"date": "2016-10-03", "price": 0.0148, "strike": 1.23, "volatility": 54.54},
+        "CAP5": {"date": "2017-10-02", "price": 0.0210, "strike": 1.48, "volatility": 41.36},
+        "CAP6": {"date": "2018-10-01", "price": 0.0278, "strike": 1.68, "volatility": 34.58},
+        "CAP7": {"date": "2019-10-01", "price": 0.0349, "strike": 1.86, "volatility": 30.46},
+        "CAP8": {"date": "2020-10-01", "price": 0.0417, "strike": 2.02, "volatility": 27.10},
+        "CAP9": {"date": "2021-10-01", "price": 0.0490, "strike": 2.16, "volatility": 25.02},
+        "CAP10": {"date": "2022-10-03", "price": 0.0565, "strike": 2.28, "volatility": 23.67},
+        "CAP15": {"date": "2027-10-01", "price": 0.0904, "strike": 2.67, "volatility": 19.87},
+        "CAP20": {"date": "2032-10-01", "price": 0.1196, "strike": 2.77, "volatility": 19.38},
+        "CAP30": {"date": "2042-10-01", "price": 0.1686, "strike": 2.75, "volatility": 19.31}
     },
+    "volatility": "bachelier",
     "method": 1,
     "start_date": "2012-10-01"
 

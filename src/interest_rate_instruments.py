@@ -35,6 +35,8 @@ class fi_instrument():
 
         self.debug = dbg
         self.name = name
+        self.maturity_ = None
+        self.yield_ = None
         self.princ = princ
         self.frequency = frequency
 
@@ -43,8 +45,8 @@ class fi_instrument():
         self.options = options.copy()
         if 'convention' not in options['control'].keys():
             self.options['control']['convetion'] = '30360'
-
         self.schedule = self.generate_schedule(first, maturity)
+        self.maturity = max(self.schedule)
         self.cash_flow_df = np.zeros([len(self.schedule), len(self.columns)])
         self.build_cf_matrix()
 
@@ -57,13 +59,17 @@ class fi_instrument():
         count = intdate.calc_bdte_diff_int(maturity, start, self.options, princ, dbg=self.debug)
         # print(self.name, count)
 
-        per = intdate.convert_period_count(count, self.frequency)
-
-        if self.debug:
-            print(start, per, self.frequency)
-
         mat = intdate.convert_date_bdte(maturity, self.options)
-        sched = intdate.calc_schedule(start, per, self.options, self.frequency)
+
+        if self.frequency:
+            per = intdate.convert_period_count(count, self.frequency)
+
+            if self.debug:
+                print(start, per, self.frequency)
+
+            sched = intdate.calc_schedule(start, per, self.options, self.frequency)
+        else:
+            sched = [intdate.convert_date_bdte(start, self.options), mat]
 
         mat = intdate.adjust_date_bd_convention(mat, self.options, False)
         sched = [itm for itm in sched if itm <= mat]
@@ -77,7 +83,7 @@ class fi_instrument():
         now = intdate.convert_date_bdte(self.options['start_date'], self.options)
         prev = now
 
-        for loc, itm in zip(np.arange(0, len(self.schedule)), self.schedule):
+        for loc, itm in enumerate(self.schedule):
             matrix[loc][0] = now.get_day_count(
                 itm, self.options['control']['convention'])
             matrix[loc][1] = prev.get_day_count(
@@ -88,15 +94,60 @@ class fi_instrument():
 
         self.cash_flow_df = pd.DataFrame(matrix, index=dates, columns=self.columns)
 
-    def generate_cf(self):
+    def generate_cf(self, price=None):
         ''' returns principal as final cashflow date '''
         max_date = np.max(self.schedule)
         self.cash_flow_df.loc[max_date, 'CF'] = self.princ
+
+        if price:
+            min_date = np.min(self.schedule)
+            self.cash_flow_df.loc[min_date, 'CF'] = (self.princ/100.)*price
+
+        self.calc_maturity()
+        self.calc_yield()
+
+    def calc_maturity(self):
+        ''' Calculated continues maturity in years '''
+        mn = self.schedule[0]
+        mx = self.schedule[len(self.schedule)-1]
+        self.maturity_ = self.cash_flow_df.loc[mx, 'maturity'] -\
+                self.cash_flow_df.loc[mn, 'maturity']
+
+    def calc_yield(self, price=None):
+        ''' calculates continuous yield '''
+        mx = np.max(self.schedule)
+        if price and isinstance(price, float):
+            price2 = price
+        else:
+            price2 = self.get_price()
+        self.yield_ = 100.*np.log(price2/self.cash_flow_df.loc[mx, 'CF'])/(-1*self.maturity_)
+
+    def get_yield(self, price=None):
+        ''' gets yields '''
+        if self.yield_ is None or not isinstance(self.yield_, float) or\
+                np.isnan(self.yield_):
+            self.calc_yield(price)
+
+        return self.yield_
+
+    def get_price(self):
+        ''' Obtains original price '''
+        mn = np.min(self.schedule)
+        return self.cash_flow_df.loc[mn, 'CF']
 
     def price_zeros(self, zero):
         ''' prices CF assuming 1. zero coupon bond 2. zero cp bond has SAME maturity as CF'''
         max_date = np.max(self.schedule)
         return self.cash_flow_df.loc[max_date, 'CF']*zero
+
+    def get_maturity(self):
+        ''' Calculated continues maturity in years '''
+        if self.maturity_ is None or not isinstance(self.maturity_, float) or\
+                np.isnan(self.maturity_):
+            self.calc_maturity()
+
+        return self.maturity_
+   #     determine_closest_maturity:
 
 
 class fixed_coupon_bond(fi_instrument):
@@ -130,7 +181,6 @@ class fixed_coupon_bond(fi_instrument):
             self.dated = intdate.convert_date_bdte(first, self.options)
         else:
             self.dated = intdate.convert_date_bdte(dated, self.options)
-        self.maturity = max(self.schedule)
         self.price = price
         self.generate_cf()
 

@@ -11,7 +11,7 @@ def test_norm():
     assert round(1e6*mdl.calc_norm_v(t=0.0, t0=0.25, t1=0.5, dbg=True), 3) == 1.028
 
 def test_pt_05():
-    ''' initila pricing test '''
+    ''' initial pricing test '''
     assert round(mdl.price_zero(0.5), 4) == 0.9686
 
 def test_put():

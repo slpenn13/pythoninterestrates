@@ -14,7 +14,7 @@ def tolerance():
 class loader():
     ''' loader -- setup for testing '''
     def __init__(self, rates_file='./data/caliibrated_base.csv',
-                 json_file='./data/wk5_psi_fitting_v2.json', dbg=False):
+                 json_file='./data/volatility_fitting_v2.json', dbg=False):
         with open(json_file, "r") as fp:
             self.options = json.load(fp)
         fp.close()

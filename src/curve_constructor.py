@@ -39,7 +39,7 @@ class curve_builder():
         self.next_swap_key = 1
         self.dbg = dbg
         self.cf_dates = {} #  OrderedDict()
-        self.names = {}
+        self.names = {} #  instrument names
         self.cf_matrix = None
         self.cf_prices = None
         self.results = None
@@ -89,6 +89,22 @@ class curve_builder():
                         key, item['nextcoupon'], item['date'], self.options,
                         init_cpn, princ=item['notional'], price=item['price'],
                         dated=self.options['start_date'])
+
+                    self.append_instrument_dates_bond(key)
+                elif item['type'].upper().startswith("ZERO"):
+                    opt2 = self.options.copy()
+                    dflt_day_cnt = (self.options['control']['convention'] if 'control' in
+                                    self.options.keys() and 'convention' in
+                                    self.options['control'].keys() else '30360')
+
+                    opt2['control']['convention'] = (item['day_count'] if 'day_copunt' in
+                                                     item.keys() else dflt_day_cnt)
+                    self.instruments[key] = intrate.fi_instrument(
+                        key, opt2['start_date'], item['date'], princ=100.0, frequency=None,
+                        options=opt2)
+
+                    if 'price' in item.keys():
+                        self.instruments[key].generate_cf(price=item['price'])
 
                     self.append_instrument_dates_bond(key)
                 else:
@@ -141,8 +157,10 @@ class curve_builder():
 
     def append_instrument_dates_bond(self, instrument):
         ''' Appends series of bond payment dates '''
-        if self.instruments[instrument].instrument_type ==\
-                    intbase.rate_instruments.FIXED_RATE_BOND and\
+        if (self.instruments[instrument].instrument_type ==\
+                    intbase.rate_instruments.FIXED_RATE_BOND or\
+                    self.instruments[instrument].instrument_type ==\
+                    intbase.rate_instruments.ZERO_COUPON) and\
                 all(self.instruments[instrument].cash_flow_df.shape) > 0:
 
             for indx, row in self.instruments[instrument].cash_flow_df.iterrows():
@@ -327,7 +345,7 @@ class curve_builder():
 
 
         rows = len(dates)
-        if self.cf_matrix is None:
+        if self.cf_matrix is None: # cf_matrix -- # dates X # instruments
             mtrx = np.zeros([rows, instrument_cnt])
             dates.sort()
             names_sorted = sorted(self.names, key=lambda x: self.names[x])
@@ -337,10 +355,10 @@ class curve_builder():
             print("Construction NP array shape %i length %i" % (self.cf_matrix.shape[0],
                                                                 self.cf_matrix.shape[1]))
 
-        if self.cf_prices is None and instrument_cnt > 0:
+        if self.cf_prices is None and instrument_cnt > 0: # # instruments
             self.cf_prices = pd.Series(np.zeros([instrument_cnt]), index=names_sorted)
 
-        if self.results is None:
+        if self.results is None: # # instruments X column count
             if "columns" in self.options['control'].keys():
                 rows = len(self.options['control']["columns"])
                 mtrx = np.zeros([instrument_cnt, rows])
@@ -485,7 +503,10 @@ class curve_builder():
                 isinstance(origin, (int, float)):
             self.results.loc[position]['origin'] = origin
 
-        mat = intdate.calc_bdte_diff(date, self.options)
+        if isinstance(date, float):
+            mat = date
+        else:
+            mat = intdate.calc_bdte_diff(date, self.options)
         # print(position, date, mat)
 
         if typ.upper().startswith('LIBOR'):
@@ -501,10 +522,11 @@ class curve_builder():
             self.results.loc[position]['maturity'] = mat
             self.results.loc[position]['rate'] = rate
             self.results.loc[position]['type'] = intbase.rate_instruments.SWAP.value
-        elif typ.upper().startswith("FIXEDCOUPONBO"):
+        elif typ.upper().startswith("FIXEDCOUPONBO") or typ.upper().startswith("ZERO"):
             self.results.loc[position]['maturity'] = mat
             self.results.loc[position]['rate'] = rate
-            self.results.loc[position]['type'] = intbase.rate_instruments.FIXED_RATE_BOND.value
+            self.results.loc[position]['type'] = intbase.rate_instruments.ZERO_COUPON.value if\
+                typ.upper().startswith("ZERO") else intbase.rate_instruments.FIXED_RATE_BOND.value
         else:
             raise ValueError("Type not supported")
 
@@ -755,18 +777,28 @@ class curve_builder():
                 print("Warning -- zeros NOT calculated")
         return res
 
-    def apply_zeros(self):
+    def apply_zeros(self, mapping_dict=None, override=False):
         ''' Updates self.results with zeros, maturity, yields '''
-        res = self.zeros.status()
+        res = (True if override else self.zeros.status())
+
+        if mapping_dict:
+            m_dict = mapping_dict.copy()
+        else:
+            m_dict = {"zero": "zero", "maturity": "maturity", "date_diff": "date_diff",
+                      "forward": "forward", "yield": "yield"}
+
         if res:
             for loc in self.results.index:
                 indx = self.zeros.determine_closest_maturity(self.results.loc[loc, 'maturity'])
                 if indx:
-                    self.results.loc[loc, 'zero'] = self.zeros.matrix.loc[indx, 'zero']
-                    self.results.loc[loc, 'maturity'] = self.zeros.matrix.loc[indx, 'maturity']
-                    self.results.loc[loc, 'date_diff'] = self.zeros.matrix.loc[indx, 'date_diff']
-                    self.results.loc[loc, 'forward'] = self.zeros.matrix.loc[indx, 'forward']
-                    self.results.loc[loc, 'yield'] = self.zeros.matrix.loc[indx, 'yield']
+                    self.results.loc[loc, 'zero'] = self.zeros.matrix.loc[indx, m_dict['zero']]
+                    self.results.loc[loc, 'maturity'] = self.zeros.matrix.loc[indx,
+                                                                              m_dict['maturity']]
+                    self.results.loc[loc, 'date_diff'] = self.zeros.matrix.loc[indx,
+                                                                               m_dict['date_diff']]
+                    self.results.loc[loc, 'forward'] = self.zeros.matrix.loc[indx,
+                                                                             m_dict['forward']]
+                    self.results.loc[loc, 'yield'] = self.zeros.matrix.loc[indx, m_dict['yield']]
                 else:
                     if self.dbg:
                         print("Maturity (%f) not found" % (self.results.loc[loc, 'maturity']))

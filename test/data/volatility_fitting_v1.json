@@ -2,7 +2,7 @@
     "count": 17,
     "control": {"count": 17, "convention": "30360", "columns": [
         "maturity", "rate", "zero", "type", "origin", "spot", "yield", "forward", "loaded"], 
-        "date_format": "%Y-%m-%d", "split": "-", "date_adjust": "follow",
+        "date_format": "%Y-%m-%d", "split": "-", "date_adjust": "none",
         "date_tol": 0.12, "append_reset": 0 },
     "forward_references": {"2013-10-13": ""}, 
     "instruments": {
@@ -35,6 +35,6 @@
             "frequency": "S", "reference_rate": "LIBOR", "is_fixed_payer": 1}
     },
     "method": 1,
-    "start_date": "2012-10-01"
+    "start_date": "2012-03-01"
 
 }

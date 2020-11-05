@@ -1,0 +1,17 @@
+{
+    "control": {"count": 17, "convention": "30_360", "columns": [
+        "maturity", "rate", "zero", "type", "origin", "spot", "yield", "forward", "loaded"], 
+        "date_format": "%Y-%m-%d", "split": "-", "date_adjust": "follow",
+        "date_tol": 0.12, "append_reset": 0, "override": 1 },
+    "data": { "file": "/home/spennington/git/pythoninterestrates/test/data/lorimier_swiss.csv"
+    },
+  "review": {
+      "comparisons": {"yield": {"comp": "yield_hat", "name": "yield_diff"}
+        },
+      "plots": {
+          "actual_v_proj": { "comparison": { "series": "yield", "points": 85 }
+          }
+      }
+  },
+  "start_date": "2020-09-20"
+}
