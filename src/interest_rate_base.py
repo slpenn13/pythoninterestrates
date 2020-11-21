@@ -260,6 +260,7 @@ class fixed_coupon(coupon):
         res = (0.01*self.coupon if self.in_percent else self.coupon)
         return mult*res
 
+
 class floating_coupon(coupon):
     '''base floating coupon '''
 

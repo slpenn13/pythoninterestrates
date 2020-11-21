@@ -135,5 +135,48 @@ class discount_calculator():
                 break
         return res
 
+    def  calc_vector_zeros(self, maturities):
+        ''' calculates vector of maturities '''
+        vec = np.zeros(len(maturities))
+
+        for i, mat in enumerate(maturities):
+            # print(i, mat, type(mat))
+            vec[i] = self.calc_zero(mat)
+
+        return vec
+
+    def interpolate_zero(self, maturity):
+        ''' calculates zero given maturity '''
+        # TODO add calculate missing to be override by lorimier method
+        res = 0
+        if maturity > 0:
+            raise ValueError("Faulty Maturity Type")
+        return res
+
     def calc_zero(self, maturity):
         ''' calculates zero coupon bond based on constructed matrix'''
+        res = np.NAN
+        try:
+            if isinstance(maturity, float):
+                #indx = self.determine_closest_maturity(maturity)
+                #if indx:
+                #    res = self.matrix.loc[indx, 'zero']
+                #else:
+                res = self.interpolate_zero(maturity)
+            elif isinstance(maturity, (intdate.bdte.BusinessDate,
+                                       intdate.dt.date)):
+                maturity = (maturity if isinstance(maturity, intdate.bdte.BusinessDate)
+                            else intdate.bdte.BusinessDate(maturity))
+                if maturity in self.matrix.index:
+                    res = self.matrix.loc[maturity, 'zero']
+                else:
+                    mat = (maturity - self.matrix.index[0])
+
+                    res = self.interpolate_zero((mat.years + mat.days/360))
+            else:
+                type(maturity)
+                raise ValueError("Faulty Maturity Type")
+        except ValueError as v:
+            print(v)
+
+        return res

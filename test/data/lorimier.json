@@ -5,6 +5,8 @@
         "date_tol": 0.12, "append_reset": 0, "override": 1 },
     "data": { "file": "/home/spennington/git/pythoninterestrates/test/data/lorimier_swiss.csv"
     },
+  "filter" : { "exclude": "excluded", "key": "maturity_in_years", "name": "Price", "value": 3,
+             "type": "repeated_maturity"},
   "review": {
       "comparisons": {"yield": {"comp": "yield_hat", "name": "yield_diff"}
         },

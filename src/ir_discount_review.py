@@ -38,19 +38,26 @@ class discount_calculator_review():
             name = (val['name'] if isinstance(val, dict) and 'name' in val.keys() else
                     '_'.join([key, "diff"]))
 
-            results_dict[name] = np.abs(
-                self.dc_.matrix.loc[includes, key] - self.dc_.matrix.loc[includes, val['comp']])
+            results_dict[name] = (self.dc_.matrix.loc[includes, key] -
+                                  self.dc_.matrix.loc[includes, val['comp']])
 
-            self.results_stats[name] = results_dict[name].describe()
+            self.results_stats[name] = results_dict[name].describe(
+                percentiles=[0.05, 0.25, 0.5, 0.75, 0.95])
+
             if self.dbg:
-                print(key)
-                print(self.results_stats[name])
+                print(key, name)
+                init = self.dc_.matrix.loc[includes, val['comp']].describe(
+                    percentiles=[0.05, 0.25, 0.5, 0.75, 0.95])
+                base = pd.concat([init, self.results_stats[name]], axis=1)
+
+                base = base.rename(columns={0: name})
+
+                print(base)
 
         self.results = pd.DataFrame(results_dict)
 
     def plot_act_projected(self, actual, f0=None, title=None):
         ''' plots actual versus projected '''
-        # TODO: start here -- add init_dict and hard coded values below to json
         points = (int(self.options["plots"]["actual_v_proj"][actual])
                   if "plots" in self.options.keys() and "actual_v_proj" in
                   self.options["plots"].keys() and actual in
@@ -60,7 +67,7 @@ class discount_calculator_review():
 
         x_fnl = np.zeros([2, points])
         includes = (self.dc_.matrix['maturity'] > 0)
-        x_min = np.floor(np.min(self.dc_.matrix.loc[includes, 'maturity']))
+        x_min = min(0.005, np.min(self.dc_.matrix.loc[includes, 'maturity']))
         x_max = np.ceil(np.max(self.dc_.matrix['maturity']))
 
         x_fnl[0] = np.linspace(x_min, x_max, points)
@@ -70,10 +77,22 @@ class discount_calculator_review():
             else:
                 x_fnl[1][loc] = self.dc_.f0(val, False)
 
-        plt.figure(figsize=(10, 6))
+        plt.figure(figsize=(20, 12))
+        plt.subplot(121)
         plt.plot(x_fnl[0], x_fnl[1], lw=1.5, label='1st')
         plt.plot(self.dc_.matrix.loc[includes, 'maturity'],
                  self.dc_.matrix.loc[includes, actual], 'ro', label='point')
 
+        act2 = "_".join([actual, "diff"])
         if title:
-            plt.title(title)
+            if isinstance(title, list):
+                plt.title(title[0])
+            else:
+                plt.title(title)
+
+
+        if  act2 in self.results.keys():
+            plt.subplot(122)
+            plt.scatter(self.dc_.matrix.loc[includes, 'maturity'], self.results[act2])
+            if title and isinstance(title, list) and len(title) > 1:
+                plt.title(title[1])

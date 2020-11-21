@@ -8,6 +8,9 @@ import interest_rate_base as intbase
 import interest_rate_dates as intdate
 import interest_rate_hjm as inthjm
 import interest_rate_capfloor_convenience as intconv
+import interest_rate_discount as intdisc
+import interest_rate_discount_lorimier as intdisc_lor
+
 
 class fi_instrument():
     ''' initial fixed income / interest rate instrument class '''
@@ -28,16 +31,22 @@ class fi_instrument():
 
         if columns is not None and isinstance(columns, list):
             self.columns = columns.copy()
+            if 'discount' not in self.columns:
+                self.columns.append('discount')
+            if 'CF' not in self.columns:
+                self.columns.append('CF')
         else:
             if dbg:
                 print("Warning -- using default headers")
-            self.columns = ['maturity', 'time_diff', 'CF']
+            self.columns = ['maturity', 'time_diff', 'discount', 'CF']
 
         self.debug = dbg
         self.name = name
         self.maturity_ = None
         self.yield_ = None
+        self.cash_flow_df = None
         self.princ = princ
+        self.price = None
         self.frequency = frequency
 
         if 'control' not in options.keys():
@@ -47,7 +56,6 @@ class fi_instrument():
             self.options['control']['convetion'] = '30360'
         self.schedule = self.generate_schedule(first, maturity)
         self.maturity = max(self.schedule)
-        self.cash_flow_df = np.zeros([len(self.schedule), len(self.columns)])
         self.build_cf_matrix()
 
 
@@ -67,7 +75,7 @@ class fi_instrument():
             if self.debug:
                 print(start, per, self.frequency)
 
-            sched = intdate.calc_schedule(start, per, self.options, self.frequency)
+            sched = intdate.calc_schedule(start, mat, self.options, self.frequency)
         else:
             sched = [intdate.convert_date_bdte(start, self.options), mat]
 
@@ -79,7 +87,12 @@ class fi_instrument():
         ''' build CF df w/ dates '''
 
         dates = []
-        matrix = self.cash_flow_df.copy()
+        if self.cash_flow_df is not None and isinstance(self.cash_flow_df, pd.DataFrame) and\
+                all(self.cash_flow_df.shape) > 0:
+            matrix = self.cash_flow_df.copy()
+        else:
+            matrix = np.zeros([len(self.schedule), len(self.columns)])
+
         now = intdate.convert_date_bdte(self.options['start_date'], self.options)
         prev = now
 
@@ -113,6 +126,13 @@ class fi_instrument():
         self.maturity_ = self.cash_flow_df.loc[mx, 'maturity'] -\
                 self.cash_flow_df.loc[mn, 'maturity']
 
+    def calc_WAM(self):
+        ''' calculates the Weighted Average Maturity '''
+        den = self.cash_flow_df[1:]['CF'].sum()
+        num = self.cash_flow_df[1:]['CF'].dot(self.cash_flow_df[1:]['maturity'])
+
+        return num / den
+
     def calc_yield(self, price=None):
         ''' calculates continuous yield '''
         mx = np.max(self.schedule)
@@ -135,10 +155,42 @@ class fi_instrument():
         mn = np.min(self.schedule)
         return self.cash_flow_df.loc[mn, 'CF']
 
-    def price_zeros(self, zero):
+    def set_price(self, price=None):
+        ''' Sets price '''
+        if price and isinstance(price, float):
+            mn = np.min(self.schedule)
+            self.price = price
+            self.cash_flow_df.loc[mn, 'CF'] = -1.0*price
+        else:
+            if self.debug:
+                print("Warning: faulty price")
+
+    def calc_price_zeros(self, zero):
         ''' prices CF assuming 1. zero coupon bond 2. zero cp bond has SAME maturity as CF'''
         max_date = np.max(self.schedule)
-        return self.cash_flow_df.loc[max_date, 'CF']*zero
+        res = np.NAN
+
+        if isinstance(zero, float):
+            res = self.cash_flow_df.loc[max_date, 'CF']*zero
+        elif isinstance(zero, intdisc.discount_calculator):
+            res = self.cash_flow_df.loc[
+                max_date, 'CF']*zero.calc_zero(self.cash_flow_df.loc[max_date, 'maturity'])
+        else:
+            raise ValueError("Faulty zeros type, must be float of disc_calculator")
+
+        return res
+
+    def calc_price_yields(self, yield_, include_first=False):
+        ''' Calculates price give constant yield '''
+
+        if include_first:
+            zeros = np.exp(-0.01*yield_*self.cash_flow_df.maturity)
+            cfs = self.cash_flow_df.CF
+        else:
+            zeros = np.exp(-0.01*yield_*self.cash_flow_df[1:].maturity)
+            cfs = self.cash_flow_df[1:].CF
+
+        return zeros.dot(cfs)
 
     def get_maturity(self):
         ''' Calculated continues maturity in years '''
@@ -173,6 +225,8 @@ class fixed_coupon_bond(fi_instrument):
                                                coupon.in_percent)
         elif isinstance(coupon, float):
             self.coupon = intbase.fixed_coupon(coupon=coupon)
+        else:
+            raise ValueError("Faulty Coupon")
 
         super().__init__(name, first, maturity, options, princ=princ,
                          frequency=self.coupon.frequency, dbg=dbg)
@@ -181,10 +235,19 @@ class fixed_coupon_bond(fi_instrument):
             self.dated = intdate.convert_date_bdte(first, self.options)
         else:
             self.dated = intdate.convert_date_bdte(dated, self.options)
-        self.price = price
-        self.generate_cf()
 
-    def generate_cf(self):
+        if price and not np.isnan(price):
+            self.price = price
+        else:
+            self.price = None
+
+        self.generate_cf(self.price)
+
+    def generate_cf(self, price=None):
+        if price:
+            min_date = np.min(self.schedule)
+            self.cash_flow_df.loc[min_date, 'CF'] = -1.*(self.princ/100.)*price
+
         for row in self.cash_flow_df.iterrows():
             if self.dated < row[0]:
                 if self.maturity > row[0]:
@@ -195,6 +258,90 @@ class fixed_coupon_bond(fi_instrument):
                             self.coupon.calc_coupon(row[1][1])*self.princ
             if self.debug:
                 print(row[1])
+
+    def calc_accrued_interest(self, accrual_start=None, settle=None, coupon_date=None):
+        ''' calculates accrued interest'''
+
+        if accrual_start and isinstance(accrual_start, float) and settle and\
+                isinstance(settle, float):
+            mult = (settle - accrual_start)
+        elif not accrual_start and coupon_date and\
+                isinstance(coupon_date, (intdate.dt.date, intdate.bdte.BusinessDate)):
+            cpn_date = (intdate.bdte.BusinessDate(coupon_date)
+                        if isinstance(coupon_date, intdate.dt.date) else coupon_date)
+
+            if self.coupon.per > 0.95:
+                prd = intdate.bdte.BusinessPeriod(years=1.0)
+            elif self.coupon.per > 0.075:
+                prd = intdate.bdte.BusinessPeriod(months=int(self.coupon.per*12))
+            elif self.coupon.per < 0.0027:  # Days
+                if self.options['control']['convention'].lower().endswith("act") or\
+                        self.options['control']['convention'].lower().endswith("365"):
+                    val = 365
+                else:
+                    val = 360
+                prd = intdate.bdte.BusinessPeriod(months=int(self.coupon.per*val))
+            else:
+                raise ValueError("Faulty Coupon Period")
+            accrual_start = cpn_date - prd
+            accrual_start = accrual_start.adjust()
+            if settle:
+                settle = intdate.convert_date_bdte(settle, self.options)
+            else:
+                settle = intdate.convert_date_bdte(self.options['start_date'], self.options)
+
+            mult = accrual_start.get_day_count(settle, self.options['control']['convention'])
+        else:
+            if self.debug:
+                print(type(accrual_start), type(settle), type(coupon_date))
+            raise ValueError("Faulty accrued combination")
+
+        return self.princ*self.coupon.calc_coupon(mult)
+
+    def calc_yield(self, price=None):
+        ''' calculates continuous yield '''
+        if price and isinstance(price, float):
+            price2 = self.get_price()
+            self.set_price(price)
+
+        x1 = sco.brentq(self.calc_price_yields, -15.0, 100.0, xtol=0.0000001, args=(True))
+        if x1 and isinstance(x1, float) and not np.isnan(x1):
+            self.yield_ = x1
+            self.price = price
+
+        self.set_price(price2)
+
+        return x1
+
+
+    def calc_price_zeros(self, zero):
+        ''' prices CF assuming '''
+        if zero and isinstance(zero, list) and len(zero) == (self.cash_flow_df.shape[0]-1):
+            for i, val in enumerate(zero):
+                self.cash_flow_df.loc[self.schedule[i+1], 'discount'] = val
+        elif zero and isinstance(zero, np.ndarray) and (zero.size == self.cash_flow_df.shape[0]-1):
+            for i, val in enumerate(zero):
+                self.cash_flow_df.loc[self.schedule[i+1], 'discount'] = val
+
+        elif isinstance(zero, (intdisc.discount_calculator,
+                               intdisc_lor.discount_calculator_lorimier)):
+
+            # index = [intdate.bdte.BusinessDate(i) for i in self.cash_flow_df.index]
+            # zero_vctr = zero.calc_vector_zeros(self.cash_flow_df[1:].index)
+            zero_vctr = zero.calc_vector_zeros(self.cash_flow_df[1:]['maturity'])
+
+            for i, val in enumerate(zero_vctr):
+                self.cash_flow_df.loc[self.schedule[i+1], 'discount'] = val
+
+        else:
+            print(type(zero))
+            raise ValueError("Faulty Discounting Method (Zeros)")
+
+        if self.debug:
+            print(self.cash_flow_df.describe())
+            return self.cash_flow_df['CF'].dot(self.cash_flow_df['discount'])
+
+        return zero_vctr.dot(self.cash_flow_df[1:]['CF'])
 
 class floating_rate_bond(fi_instrument):
     '''class corresponds to floating rate coupon bond, with princ returned at final payment'''

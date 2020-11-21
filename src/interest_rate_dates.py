@@ -162,22 +162,28 @@ def calc_schedule(start, count, options, period='Y'):
     strt_fnl = convert_date_bdte(start, options)
 
     if period.upper().startswith('M'):
-        stp_fnl = strt_fnl + bdte.BusinessPeriod(months=count)
+        stp_fnl = (strt_fnl + bdte.BusinessPeriod(months=count) if
+                   isinstance(count, (int, float)) else count)
         per = bdte.BusinessPeriod(months=1)
     elif period.upper().startswith('Q'):
-        stp_fnl = strt_fnl + bdte.BusinessPeriod(quarters=count)
+        stp_fnl = (strt_fnl + bdte.BusinessPeriod(quarters=count) if
+                   isinstance(count, (int, float)) else count)
         per = bdte.BusinessPeriod(quarters=1)
     elif period.upper().startswith('S'):
-        stp_fnl = strt_fnl + bdte.BusinessPeriod(months=count)
+        stp_fnl = (strt_fnl + bdte.BusinessPeriod(months=count) if
+                   isinstance(count, (int, float)) else count)
         per = bdte.BusinessPeriod(months=6)
     elif period.upper().startswith('W'):
-        stp_fnl = strt_fnl + bdte.BusinessPeriod(weeks=count)
+        stp_fnl = (strt_fnl + bdte.BusinessPeriod(weeks=count) if
+                   isinstance(count, (int, float)) else count)
         per = bdte.BusinessPeriod(weeks=1)
     elif period.upper().startswith('D'):
-        stp_fnl = strt_fnl + bdte.BusinessPeriod(days=count)
+        stp_fnl = (strt_fnl + bdte.BusinessPeriod(days=count) if
+                   isinstance(count, (int, float)) else count)
         per = bdte.BusinessPeriod(days=1)
     else:
-        stp_fnl = strt_fnl + bdte.BusinessPeriod(years=count)
+        stp_fnl = (strt_fnl + bdte.BusinessPeriod(years=count) if
+                   isinstance(count, (int, float)) else count)
         per = bdte.BusinessPeriod(years=1)
 
     # sched = bdte.BusinessSchedule(strt_fnl, stp_fnl, per)
